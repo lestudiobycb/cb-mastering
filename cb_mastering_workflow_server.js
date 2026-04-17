@@ -30,7 +30,6 @@ const cors = require('cors');
 const { exec } = require('child_process');
 
 const app = express();
-const PORT = process.env.PORT || 3000;
 const BASE_URL = process.env.BASE_URL || `http://localhost:${PORT}`;
 
 const ADMIN_KEY = process.env.ADMIN_KEY || 'change-me';
