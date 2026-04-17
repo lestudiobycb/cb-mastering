@@ -30,6 +30,7 @@ const cors = require('cors');
 const { exec } = require('child_process');
 
 const app = express();
+const PORT = process.env.PORT || 3000;
 const BASE_URL = process.env.BASE_URL || `http://localhost:${PORT}`;
 
 const ADMIN_KEY = process.env.ADMIN_KEY || 'change-me';
@@ -760,8 +761,6 @@ app.listen(PORT, () => {
   console.log(`CB Mastering Workflow running on ${BASE_URL}`);
   console.log('Ouvre: ' + BASE_URL);
 });
-
-const PORT = process.env.PORT || 3000;
 
 app.listen(PORT, () => {
   console.log("Server running on port " + PORT);
