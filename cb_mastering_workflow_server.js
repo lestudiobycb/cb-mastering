@@ -945,7 +945,7 @@ app.post("/create-checkout-session", async (req, res) => {
             product_data: {
               name: "CB Mastering - Full Master"
             },
-            unit_amount: 900
+            unit_amount: 0
           },
           quantity: 1
         }
@@ -953,8 +953,8 @@ app.post("/create-checkout-session", async (req, res) => {
       metadata: {
         projectId
       },
-      success_url: `${process.env.BASE_URL}/success.html`,
-      cancel_url: `${process.env.BASE_URL}/cancel.html`
+      success_url: `https://www.cb-prod.com/master-success`,
+      cancel_url: `https://www.cb-prod.com/cancel`,
     });
 
     res.json({ url: session.url });
