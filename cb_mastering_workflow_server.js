@@ -976,6 +976,35 @@ app.get("/test-stripe-env", (req, res) => {
   });
 });
 
+app.post("/webhook", express.raw({ type: "application/json" }), (req, res) => {
+  console.log("🔥 WEBHOOK HIT");
+
+  const sig = req.headers["stripe-signature"];
+  let event;
+
+  try {
+    event = stripe.webhooks.constructEvent(
+      req.body,
+      sig,
+      process.env.STRIPE_WEBHOOK_SECRET
+    );
+  } catch (err) {
+    console.error("❌ Webhook signature failed:", err.message);
+    return res.status(400).send(`Webhook Error: ${err.message}`);
+  }
+
+  console.log("✅ Event reçu :", event.type);
+
+  if (event.type === "checkout.session.completed") {
+    const session = event.data.object;
+    const projectId = session.metadata.projectId;
+
+    console.log("💸 Paiement validé pour project:", projectId);
+  }
+
+  res.json({ received: true });
+});
+
 app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
   console.log(`CB Mastering Workflow running on ${BASE_URL}`);
