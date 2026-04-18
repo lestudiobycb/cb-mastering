@@ -765,3 +765,12 @@ app.listen(PORT, () => {
 app.listen(PORT, () => {
   console.log("Server running on port " + PORT);
 });
+
+app.get("/test-env", (req, res) => {
+  res.json({
+    region: process.env.AWS_REGION,
+    bucket: process.env.AWS_BUCKET_NAME,
+    hasKey: !!process.env.AWS_ACCESS_KEY_ID,
+    hasSecret: !!process.env.AWS_SECRET_ACCESS_KEY,
+  });
+});
