@@ -163,6 +163,7 @@ async function uploadToS3(localPath, key, contentType) {
 
 app.post("/create-project", async (req, res) => {
   try {
+    console.log("📦 CREATE-PROJECT BODY:", req.body);
     const projectId = crypto.randomUUID();
     const key = `uploads/${projectId}/original.wav`;
 
