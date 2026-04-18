@@ -23,8 +23,8 @@
 const express = require('express');
 const multer = require('multer');
 const nodemailer = require('nodemailer');
-const path = require('path');
 const fs = require('fs');
+const path = require("path");
 const crypto = require('crypto');
 const cors = require('cors');
 const { exec } = require('child_process');
@@ -107,8 +107,6 @@ function generatePreview(inputPath, outputPath) {
   });
 }
 
-const fs = require("fs");
-const path = require("path");
 const { GetObjectCommand, PutObjectCommand } = require("@aws-sdk/client-s3");
 
 async function downloadFromS3(key, localPath) {
