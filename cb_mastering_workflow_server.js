@@ -1065,48 +1065,48 @@ app.post("/webhook", express.raw({ type: "application/json" }), async (req, res)
 
   console.log("✅ Event reçu :", event.type);
 
-if (event.type === "checkout.session.completed") {
-  const session = event.data.object;
-  const projectId = session.metadata.projectId;
+  if (event.type === "checkout.session.completed") {
+    const session = event.data.object;
+    const projectId = session.metadata.projectId;
 
-  console.log("💰 Paiement validé pour projet:", projectId);
+    console.log("💰 Paiement validé pour projet:", projectId);
 
-  const inputKey = `uploads/${projectId}/original.wav`;
-  const masterKey = `masters/${projectId}/master.wav`;
+    const inputKey = `uploads/${projectId}/original.wav`;
+    const masterKey = `masters/${projectId}/master.wav`;
 
-  const localInput = `./tmp/${projectId}-input.wav`;
-  const localOutput = `./tmp/${projectId}-master.wav`;
+    const localInput = `./tmp/${projectId}-input.wav`;
+    const localOutput = `./tmp/${projectId}-master.wav`;
 
-  try {
-    fs.mkdirSync("./tmp", { recursive: true });
+    try {
+      fs.mkdirSync("./tmp", { recursive: true });
 
-    await downloadFromS3(inputKey, localInput);
-    await generateFinalMaster(localInput, localOutput);
-    await uploadToS3(localOutput, masterKey, "audio/wav");
+      await downloadFromS3(inputKey, localInput);
+      await generateFinalMaster(localInput, localOutput);
+      await uploadToS3(localOutput, masterKey, "audio/wav");
 
-    const url = await getSignedDownloadUrl(masterKey);
-    console.log("✅ MASTER PRÊT:", url);
+      const url = await getSignedDownloadUrl(masterKey);
+      console.log("✅ MASTER PRÊT:", url);
 
-    const metadata = await getObjectMetadata(inputKey);
-    const clientEmail = metadata.Metadata?.email;
+      const metadata = await getObjectMetadata(inputKey);
+      const clientEmail = metadata.Metadata?.email || metadata.metadata?.email;
 
-    if (clientEmail) {
-      await sendClientMasterEmail(clientEmail, url);
-      console.log("📧 Mail client envoyé à :", clientEmail);
-    } else {
-      console.log("⚠️ Aucun email trouvé pour ce projet.");
+      if (clientEmail) {
+        await sendClientMasterEmail(clientEmail, url);
+        console.log("📧 Mail client envoyé à :", clientEmail);
+      } else {
+        console.log("⚠️ Aucun email trouvé pour ce projet.");
+      }
+
+      if (fs.existsSync(localInput)) fs.unlinkSync(localInput);
+      if (fs.existsSync(localOutput)) fs.unlinkSync(localOutput);
+
+    } catch (err) {
+      console.error("❌ Erreur post-paiement :", err);
+
+      if (fs.existsSync(localInput)) fs.unlinkSync(localInput);
+      if (fs.existsSync(localOutput)) fs.unlinkSync(localOutput);
     }
-
-    if (fs.existsSync(localInput)) fs.unlinkSync(localInput);
-    if (fs.existsSync(localOutput)) fs.unlinkSync(localOutput);
-
-  } catch (err) {
-    console.error("❌ Erreur post-paiement :", err);
-
-    if (fs.existsSync(localInput)) fs.unlinkSync(localInput);
-    if (fs.existsSync(localOutput)) fs.unlinkSync(localOutput);
   }
-}
 
   res.json({ received: true });
 });
