@@ -953,8 +953,11 @@ app.post("/create-checkout-session", async (req, res) => {
 
     res.json({ url: session.url });
   } catch (err) {
-    console.error("Stripe error:", err);
-    res.status(500).send("Erreur Stripe");
+  console.error("Stripe error full:", err);
+  res.status(500).json({
+    error: err.message,
+    type: err.type || null
+    });
   }
 });
 
