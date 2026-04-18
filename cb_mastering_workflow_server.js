@@ -107,6 +107,116 @@ function generatePreview(inputPath, outputPath) {
   });
 }
 
+const fs = require("fs");
+const path = require("path");
+const { GetObjectCommand, PutObjectCommand } = require("@aws-sdk/client-s3");
+
+async function downloadFromS3(key, localPath) {
+  const command = new GetObjectCommand({
+    Bucket: process.env.AWS_BUCKET_NAME,
+    Key: key,
+  });
+
+  const response = await s3.send(command);
+
+  const stream = fs.createWriteStream(localPath);
+  return new Promise((resolve, reject) => {
+    response.Body.pipe(stream);
+    response.Body.on("error", reject);
+    stream.on("finish", resolve);
+  });
+}
+
+async function uploadToS3(localPath, key, contentType) {
+  const fileStream = fs.createReadStream(localPath);
+
+  const command = new PutObjectCommand({
+    Bucket: process.env.AWS_BUCKET_NAME,
+    Key: key,
+    Body: fileStream,
+    ContentType: contentType,
+  });
+
+  await s3.send(command);
+}
+
+app.post("/create-project", async (req, res) => {
+  const projectId = crypto.randomUUID();
+
+  const key = `uploads/${projectId}/original.wav`;
+
+  const command = new PutObjectCommand({
+    Bucket: process.env.AWS_BUCKET_NAME,
+    Key: key,
+    ContentType: "audio/wav",
+  });
+
+  const uploadUrl = await getSignedUrl(s3, command, { expiresIn: 300 });
+
+  res.json({
+    projectId,
+    uploadUrl,
+  });
+});
+
+app.post("/generate-preview", async (req, res) => {
+
+  const { projectId } = req.body;
+
+  if (!projectId) {
+    return res.status(400).send("projectId manquant");
+  }
+
+  try {
+
+    const inputKey = `uploads/${projectId}/original.wav`;
+    const previewKey = `previews/${projectId}/preview.mp3`;
+
+    const localInput = `./tmp/${projectId}.wav`;
+    const localOutput = `./tmp/${projectId}.mp3`;
+
+    fs.mkdirSync("./tmp", { recursive: true });
+
+    // download depuis S3
+    await downloadFromS3(inputKey, localInput);
+
+    // generate preview
+    await generatePreview(localInput, localOutput);
+
+    // upload preview vers S3
+    await uploadToS3(localOutput, previewKey, "audio/mpeg");
+
+    // cleanup SAFE (anti crash inutile)
+    if (fs.existsSync(localInput)) fs.unlinkSync(localInput);
+    if (fs.existsSync(localOutput)) fs.unlinkSync(localOutput);
+
+    res.json({ success: true });
+
+  catch (err) {
+    console.error(err);
+
+    if (fs.existsSync(localInput)) fs.unlinkSync(localInput);
+    if (fs.existsSync(localOutput)) fs.unlinkSync(localOutput);
+
+    res.status(500).send("Erreur generate preview");
+   }
+});
+
+app.get("/preview/:projectId", async (req, res) => {
+  const { projectId } = req.params;
+
+  const key = `previews/${projectId}/preview.mp3`;
+
+  const command = new GetObjectCommand({
+    Bucket: process.env.AWS_BUCKET_NAME,
+    Key: key,
+  });
+
+  const url = await getSignedUrl(s3, command, { expiresIn: 3600 });
+
+  res.json({ url });
+});
+
 function jobsFilePath() {
   return path.join(DATA_DIR, 'jobs.json');
 }
