@@ -96,13 +96,13 @@ function generatePreview(inputPath, outputPath) {
   return new Promise((resolve, reject) => {
     const cmd = `ffmpeg -i "${inputPath}" -t 30 -q:a 4 "${outputPath}"`;
 
-    exec(cmd, (error) => {
+    exec(cmd, (error, stdout, stderr) => {
       if (error) {
-        console.error("FFmpeg error:", error);
-        reject(error);
-      } else {
-        resolve();
+        console.error("FFmpeg stdout:", stdout);
+        console.error("FFmpeg stderr:", stderr);
+        return reject(new Error(stderr || error.message));
       }
+      resolve();
     });
   });
 }
@@ -815,8 +815,8 @@ app.get("/test-preview", async (req, res) => {
 
     res.send("Preview généré !");
   } catch (err) {
-    console.error(err);
-    res.status(500).send("Erreur preview");
+    console.error("ERREUR PREVIEW COMPLETE :", err);
+    res.status(500).send("Erreur preview : " + err.message);
   }
 });
 
