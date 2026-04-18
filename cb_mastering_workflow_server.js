@@ -57,7 +57,9 @@ for (const dir of [DATA_DIR, UPLOAD_DIR, MASTER_DIR, PREVIEW_DIR]) {
   if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
 }
 
-app.use(cors());
+app.use(cors({
+  origin: "*"
+}));
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true }));
 app.use('/masters', express.static(MASTER_DIR));
