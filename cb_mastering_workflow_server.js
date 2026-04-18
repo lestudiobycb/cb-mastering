@@ -104,7 +104,7 @@ function runCommand(command) {
 
 function generatePreview(inputPath, outputPath) {
   return new Promise((resolve, reject) => {
-    const cmd = `ffmpeg -i "${inputPath}" -t 30 -q:a 4 "${outputPath}"`;
+    const cmd = `ffmpeg -i "${inputPath}" -t 30 -af "highpass=f=25,lowpass=f=18500,acompressor=threshold=-18dB:ratio=2:attack=15:release=120,alimiter=limit=-2.0dB" -q:a 4 "${outputPath}"`;
 
     exec(cmd, (error, stdout, stderr) => {
       if (error) {
