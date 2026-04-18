@@ -162,28 +162,35 @@ async function uploadToS3(localPath, key, contentType) {
 }
 
 app.post("/create-project", async (req, res) => {
-  const projectId = crypto.randomUUID();
+  try {
+    const projectId = crypto.randomUUID();
+    const key = `uploads/${projectId}/original.wav`;
 
-  const key = `uploads/${projectId}/original.wav`;
+    const { email } = req.body || {};
 
- const { email } = req.body;
+    const command = new PutObjectCommand({
+      Bucket: process.env.AWS_BUCKET_NAME,
+      Key: key,
+      ContentType: "audio/wav",
+      Metadata: {
+        email: email || "",
+        projectid: projectId.toString()
+      }
+    });
 
-const command = new PutObjectCommand({
-  Bucket: process.env.AWS_BUCKET_NAME,
-  Key: key,
-  ContentType: "audio/wav",
-  Metadata: {
-    email: email || "",
-    projectid: projectId.toString()
+    const uploadUrl = await getSignedUrl(s3, command, { expiresIn: 300 });
+
+    res.json({
+      projectId,
+      uploadUrl
+    });
+  } catch (err) {
+    console.error("❌ create-project error:", err);
+    res.status(500).json({
+      error: "create-project failed",
+      details: err.message
+    });
   }
-});
-
-  const uploadUrl = await getSignedUrl(s3, command, { expiresIn: 300 });
-
-  res.json({
-    projectId,
-    uploadUrl,
-  });
 });
 
 async function getSignedDownloadUrl(key) {
