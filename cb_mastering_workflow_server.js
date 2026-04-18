@@ -945,7 +945,7 @@ app.post("/create-checkout-session", async (req, res) => {
             product_data: {
               name: "CB Mastering - Full Master"
             },
-            unit_amount: 1
+            unit_amount: 100
           },
           quantity: 1
         }
