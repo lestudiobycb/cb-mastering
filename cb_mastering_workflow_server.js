@@ -30,6 +30,8 @@ const cors = require('cors');
 const { exec } = require('child_process');
 const { S3Client, PutObjectCommand, GetObjectCommand } = require("@aws-sdk/client-s3");
 const { getSignedUrl } = require("@aws-sdk/s3-request-presigner");
+const Stripe = require("stripe");
+const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -38,7 +40,7 @@ const BASE_URL = process.env.BASE_URL || `http://localhost:${PORT}`;
 const ADMIN_KEY = process.env.ADMIN_KEY || 'change-me';
 const GMAIL_USER = process.env.GMAIL_USER || 'lestudiobycb@gmail.com';
 const GMAIL_APP_PASSWORD = process.env.GMAIL_APP_PASSWORD || 'PUT_GMAIL_APP_PASSWORD_HERE';
-const STRIPE_PAYMENT_LINK = process.env.STRIPE_PAYMENT_LINK || 'https://buy.stripe.com/test_replace_me';
+const STRIPE_PAYMENT_LINK = process.env.STRIPE_PAYMENT_LINK || 'https://buy.stripe.com/dRm9AU9ETfdB289dCpcfK0d';
 const s3 = new S3Client({
   region: process.env.AWS_REGION,
   credentials: {
@@ -916,6 +918,43 @@ app.get("/test-preview", async (req, res) => {
   } catch (err) {
     console.error("ERREUR PREVIEW COMPLETE :", err);
     res.status(500).send("Erreur preview : " + err.message);
+  }
+});
+
+app.post("/create-checkout-session", async (req, res) => {
+  try {
+    const { projectId } = req.body;
+
+    if (!projectId) {
+      return res.status(400).send("projectId manquant");
+    }
+
+    const session = await stripe.checkout.sessions.create({
+      payment_method_types: ["card"],
+      mode: "payment",
+      line_items: [
+        {
+          price_data: {
+            currency: "eur",
+            product_data: {
+              name: "CB Mastering - Full Master",
+            },
+            unit_amount: 1999, // 9.00€
+          },
+          quantity: 1,
+        },
+      ],
+      metadata: {
+        projectId,
+      },
+      success_url: `${process.env.BASE_URL}/success.html`,
+      cancel_url: `${process.env.BASE_URL}/cancel.html`,
+    });
+
+    res.json({ url: session.url });
+  } catch (err) {
+    console.error(err);
+    res.status(500).send("Erreur Stripe");
   }
 });
 
