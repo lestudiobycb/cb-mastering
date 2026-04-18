@@ -156,46 +156,37 @@ app.post("/create-project", async (req, res) => {
 });
 
 app.post("/generate-preview", async (req, res) => {
-
   const { projectId } = req.body;
 
   if (!projectId) {
     return res.status(400).send("projectId manquant");
   }
 
-  try {
+  const localInput = `./tmp/${projectId}.wav`;
+  const localOutput = `./tmp/${projectId}.mp3`;
 
+  try {
     const inputKey = `uploads/${projectId}/original.wav`;
     const previewKey = `previews/${projectId}/preview.mp3`;
 
-    const localInput = `./tmp/${projectId}.wav`;
-    const localOutput = `./tmp/${projectId}.mp3`;
-
     fs.mkdirSync("./tmp", { recursive: true });
 
-    // download depuis S3
     await downloadFromS3(inputKey, localInput);
-
-    // generate preview
     await generatePreview(localInput, localOutput);
-
-    // upload preview vers S3
     await uploadToS3(localOutput, previewKey, "audio/mpeg");
 
-    // cleanup SAFE (anti crash inutile)
     if (fs.existsSync(localInput)) fs.unlinkSync(localInput);
     if (fs.existsSync(localOutput)) fs.unlinkSync(localOutput);
 
     res.json({ success: true });
-
-  catch (err) {
+  } catch (err) {
     console.error(err);
 
     if (fs.existsSync(localInput)) fs.unlinkSync(localInput);
     if (fs.existsSync(localOutput)) fs.unlinkSync(localOutput);
 
     res.status(500).send("Erreur generate preview");
-   }
+  }
 });
 
 app.get("/preview/:projectId", async (req, res) => {
