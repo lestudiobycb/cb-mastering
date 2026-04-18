@@ -28,7 +28,7 @@ const path = require("path");
 const crypto = require('crypto');
 const cors = require('cors');
 const { exec } = require('child_process');
-const { S3Client, PutObjectCommand } = require("@aws-sdk/client-s3");
+const { S3Client, PutObjectCommand, GetObjectCommand } = require("@aws-sdk/client-s3");
 const { getSignedUrl } = require("@aws-sdk/s3-request-presigner");
 
 const app = express();
@@ -106,8 +106,6 @@ function generatePreview(inputPath, outputPath) {
     });
   });
 }
-
-const { GetObjectCommand, PutObjectCommand } = require("@aws-sdk/client-s3");
 
 async function downloadFromS3(key, localPath) {
   const command = new GetObjectCommand({
