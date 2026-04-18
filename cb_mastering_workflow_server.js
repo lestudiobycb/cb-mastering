@@ -62,7 +62,13 @@ for (const dir of [DATA_DIR, UPLOAD_DIR, MASTER_DIR, PREVIEW_DIR]) {
 app.use(cors({
   origin: "*"
 }));
-app.use(express.json({ limit: '10mb' }));
+app.use((req, res, next) => {
+  if (req.originalUrl === "/webhook") {
+    next();
+  } else {
+    express.json({ limit: "10mb" })(req, res, next);
+  }
+});
 app.use(express.urlencoded({ extended: true }));
 app.use('/masters', express.static(MASTER_DIR));
 app.use('/previews', express.static(PREVIEW_DIR));
