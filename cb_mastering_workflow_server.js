@@ -102,19 +102,27 @@ function runCommand(command) {
   });
 }
 
-function generatePreview(inputPath, outputPath) {
+function getAudioDuration(filePath) {
   return new Promise((resolve, reject) => {
-    const cmd = `ffmpeg -ss 30 -i "${inputPath}" -t 30 -af "highpass=f=25,lowpass=f=18500,acompressor=threshold=-18dB:ratio=2:attack=15:release=120,alimiter=limit=-2.0dB" -q:a 4 "${outputPath}"`;
-
-    exec(cmd, (error, stdout, stderr) => {
-      if (error) {
-        console.error("FFmpeg stdout:", stdout);
-        console.error("FFmpeg stderr:", stderr);
-        return reject(new Error(stderr || error.message));
-      }
-      resolve();
+    exec(`ffprobe -i "${filePath}" -show_entries format=duration -v quiet -of csv="p=0"`, (err, stdout) => {
+      if (err) return reject(err);
+      resolve(parseFloat(stdout));
     });
   });
+}
+
+async function generatePreview(inputPath, outputPath) {
+  const duration = await getAudioDuration(inputPath);
+
+  let start = 0;
+
+  if (duration > 40) {
+    start = Math.floor(duration / 2 - 15);
+  }
+
+  const cmd = `ffmpeg -ss ${start} -i "${inputPath}" -t 30 -af "highpass=f=25,lowpass=f=18500,acompressor=threshold=-18dB:ratio=2:attack=15:release=120,alimiter=limit=-2.0dB" -q:a 4 "${outputPath}"`;
+
+  return runCommand(cmd);
 }
 
 function generateFinalMaster(inputPath, outputPath) {
