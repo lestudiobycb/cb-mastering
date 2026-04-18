@@ -413,6 +413,34 @@ async function sendClientPaymentEmail(to, projectId) {
   });
 }
 
+async function sendStudioPaidEmail(projectId, clientEmail) {
+  const originalFileUrl = `https://cb-mastering.onrender.com/uploads/${projectId}/original.wav`;
+  const adminUrl = `https://cb-mastering.onrender.com/admin`;
+  const statusUrl = `https://cb-mastering.onrender.com/status/${projectId}`;
+
+  const html = `
+    <div style="font-family: Arial; line-height:1.6;">
+      <h2>🔥 MASTERING REQUIRED</h2>
+      <p><strong>Project ID:</strong> ${projectId}</p>
+      <p><strong>Client email:</strong> ${clientEmail}</p>
+      <p>Le client a payé. Tu peux lancer le mastering maintenant.</p>
+      <p>
+        🎧 <a href="${originalFileUrl}">Download original file</a><br>
+        📊 <a href="${statusUrl}">Client status page</a><br>
+        ⚙️ <a href="${adminUrl}">Admin upload</a>
+      </p>
+      <p style="color:#888;">CB Production System</p>
+    </div>
+  `;
+
+  await transporter.sendMail({
+    from: GMAIL_USER,
+    to: GMAIL_USER,
+    subject: `🔥 PAID MASTERING REQUIRED - ${projectId}`,
+    html
+  });
+}
+
 function htmlLayout(content, title = 'CB Studio') {
   return `
   <!DOCTYPE html>
@@ -1082,12 +1110,13 @@ app.post("/webhook", express.raw({ type: "application/json" }), async (req, res)
     const metadata = await getObjectMetadata(inputKey);
     const clientEmail = metadata.Metadata?.email || metadata.metadata?.email;
 
-    if (clientEmail) {
-      await sendClientPaymentEmail(clientEmail, projectId);
-      console.log("📧 Mail confirmation envoyé à :", clientEmail);
-    } else {
-      console.log("⚠️ Aucun email trouvé");
-    }
+   if (clientEmail) {
+  await sendClientPaymentEmail(clientEmail, projectId);
+  await sendStudioPaidEmail(projectId, clientEmail);
+  console.log("📧 Mails envoyés : client + studio");
+} else {
+  console.log("⚠️ Aucun email trouvé pour ce projet.");
+}
 
   } catch (err) {
     console.error("❌ Erreur post-paiement :", err);
