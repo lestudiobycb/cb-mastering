@@ -28,6 +28,8 @@ const fs = require('fs');
 const crypto = require('crypto');
 const cors = require('cors');
 const { exec } = require('child_process');
+const { S3Client, PutObjectCommand } = require("@aws-sdk/client-s3");
+const { getSignedUrl } = require("@aws-sdk/s3-request-presigner");
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -37,6 +39,13 @@ const ADMIN_KEY = process.env.ADMIN_KEY || 'change-me';
 const GMAIL_USER = process.env.GMAIL_USER || 'lestudiobycb@gmail.com';
 const GMAIL_APP_PASSWORD = process.env.GMAIL_APP_PASSWORD || 'PUT_GMAIL_APP_PASSWORD_HERE';
 const STRIPE_PAYMENT_LINK = process.env.STRIPE_PAYMENT_LINK || 'https://buy.stripe.com/test_replace_me';
+const s3 = new S3Client({
+  region: process.env.AWS_REGION,
+  credentials: {
+    accessKeyId: process.env.AWS_ACCESS_KEY_ID,
+    secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY,
+  },
+});
 
 const ROOT = __dirname;
 const DATA_DIR = path.join(ROOT, 'data');
@@ -757,15 +766,6 @@ app.get('/health', (req, res) => {
   res.json({ ok: true });
 });
 
-app.listen(PORT, () => {
-  console.log(`CB Mastering Workflow running on ${BASE_URL}`);
-  console.log('Ouvre: ' + BASE_URL);
-});
-
-app.listen(PORT, () => {
-  console.log("Server running on port " + PORT);
-});
-
 app.get("/test-env", (req, res) => {
   res.json({
     region: process.env.AWS_REGION,
@@ -775,44 +775,23 @@ app.get("/test-env", (req, res) => {
   });
 });
 
-import { S3Client, PutObjectCommand } from "@aws-sdk/client-s3";
-import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
-
-const s3 = new S3Client({
-  region: process.env.AWS_REGION,
-  credentials: {
-    accessKeyId: process.env.AWS_ACCESS_KEY_ID,
-    secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY,
-  },
-});
-
-app.post("/upload-url", async (req, res) => {
+app.get("/upload-test", async (req, res) => {
   try {
-    const { filename, type } = req.body;
-
     const command = new PutObjectCommand({
       Bucket: process.env.AWS_BUCKET_NAME,
-      Key: `uploads/${Date.now()}-${filename}`,
-      ContentType: type,
+      Key: "uploads/test.wav",
+      ContentType: "audio/wav",
     });
 
     const url = await getSignedUrl(s3, command, { expiresIn: 60 });
-
-    res.json({ url });
-  } catch (err) {
-    console.error(err);
-    res.status(500).send("Erreur upload");
+    res.send(url);
+  } catch (error) {
+    console.error("Erreur upload-test :", error);
+    res.status(500).send("Erreur génération URL upload");
   }
 });
 
-app.get("/upload-test", async (req, res) => {
-  const command = new PutObjectCommand({
-    Bucket: process.env.AWS_BUCKET_NAME,
-    Key: `uploads/test.wav`,
-    ContentType: "audio/wav",
-  });
-
-  const url = await getSignedUrl(s3, command, { expiresIn: 60 });
-
-  res.send(url);
+app.listen(PORT, () => {
+  console.log(`Server running on port ${PORT}`);
+  console.log(`CB Mastering Workflow running on ${BASE_URL}`);
 });
