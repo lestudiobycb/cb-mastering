@@ -175,7 +175,6 @@ const command = new PutObjectCommand({
   Metadata: {
     email: email || "",
     projectid: projectId.toString()
-    }
   }
 });
 
