@@ -117,6 +117,21 @@ function generatePreview(inputPath, outputPath) {
   });
 }
 
+function generateFinalMaster(inputPath, outputPath) {
+  return new Promise((resolve, reject) => {
+    const cmd = `ffmpeg -y -i "${inputPath}" -af "highpass=f=25,lowpass=f=18500,acompressor=threshold=-16dB:ratio=2.5:attack=20:release=150,alimiter=limit=-1.0dB" "${outputPath}"`;
+
+    exec(cmd, (error, stdout, stderr) => {
+      if (error) {
+        console.error("Final master ffmpeg stdout:", stdout);
+        console.error("Final master ffmpeg stderr:", stderr);
+        return reject(new Error(stderr || error.message));
+      }
+      resolve();
+    });
+  });
+}
+
 async function downloadFromS3(key, localPath) {
   const command = new GetObjectCommand({
     Bucket: process.env.AWS_BUCKET_NAME,
@@ -151,11 +166,18 @@ app.post("/create-project", async (req, res) => {
 
   const key = `uploads/${projectId}/original.wav`;
 
-  const command = new PutObjectCommand({
-    Bucket: process.env.AWS_BUCKET_NAME,
-    Key: key,
-    ContentType: "audio/wav",
-  });
+ const { email } = req.body;
+
+const command = new PutObjectCommand({
+  Bucket: process.env.AWS_BUCKET_NAME,
+  Key: key,
+  ContentType: "audio/wav",
+  Metadata: {
+    email: email || "",
+    projectid: projectId.toString()
+    }
+  }
+});
 
   const uploadUrl = await getSignedUrl(s3, command, { expiresIn: 300 });
 
@@ -164,6 +186,15 @@ app.post("/create-project", async (req, res) => {
     uploadUrl,
   });
 });
+
+async function getSignedDownloadUrl(key) {
+  const command = new GetObjectCommand({
+    Bucket: process.env.AWS_BUCKET_NAME,
+    Key: key,
+  });
+
+  return await getSignedUrl(s3, command, { expiresIn: 3600 * 24 });
+}
 
 app.post("/generate-preview", async (req, res) => {
   const { projectId } = req.body;
@@ -976,7 +1007,7 @@ app.get("/test-stripe-env", (req, res) => {
   });
 });
 
-app.post("/webhook", express.raw({ type: "application/json" }), (req, res) => {
+app.post("/webhook", express.raw({ type: "application/json" }), async (req, res) => {
   console.log("🔥 WEBHOOK HIT");
 
   const sig = req.headers["stripe-signature"];
@@ -995,12 +1026,28 @@ app.post("/webhook", express.raw({ type: "application/json" }), (req, res) => {
 
   console.log("✅ Event reçu :", event.type);
 
-  if (event.type === "checkout.session.completed") {
-    const session = event.data.object;
-    const projectId = session.metadata.projectId;
+if (event.type === "checkout.session.completed") {
+  const session = event.data.object;
+  const projectId = session.metadata.projectId;
 
-    console.log("💸 Paiement validé pour project:", projectId);
-  }
+  console.log("💰 Paiement validé pour projet:", projectId);
+
+  const inputKey = `uploads/${projectId}/original.wav`;
+  const masterKey = `masters/${projectId}/master.wav`;
+
+  const localInput = `./tmp/${projectId}-input.wav`;
+  const localOutput = `./tmp/${projectId}-master.wav`;
+
+  await downloadFromS3(inputKey, localInput);
+
+  await generateFinalMaster(localInput, localOutput);
+
+  await uploadToS3(localOutput, masterKey, "audio/wav");
+
+  const url = await getSignedDownloadUrl(masterKey);
+
+  console.log("✅ MASTER PRÊT:", url);
+}
 
   res.json({ received: true });
 });
