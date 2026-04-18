@@ -937,23 +937,23 @@ app.post("/create-checkout-session", async (req, res) => {
           price_data: {
             currency: "eur",
             product_data: {
-              name: "CB Mastering - Full Master",
+              name: "CB Mastering - Full Master"
             },
-            unit_amount: 1999, // 9.00€
+            unit_amount: 1999
           },
-          quantity: 1,
-        },
+          quantity: 1
+        }
       ],
       metadata: {
-        projectId,
+        projectId
       },
       success_url: `${process.env.BASE_URL}/success.html`,
-      cancel_url: `${process.env.BASE_URL}/cancel.html`,
+      cancel_url: `${process.env.BASE_URL}/cancel.html`
     });
 
     res.json({ url: session.url });
   } catch (err) {
-    console.error(err);
+    console.error("Stripe error:", err);
     res.status(500).send("Erreur Stripe");
   }
 });
