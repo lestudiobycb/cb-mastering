@@ -388,25 +388,27 @@ async function sendStudioEmail(job) {
   });
 }
 
-async function sendClientMasterEmail(to, downloadUrl) {
+async function sendClientPaymentEmail(to, projectId) {
   const html = `
-    <div style="font-family: Arial, Helvetica, sans-serif; color: #111; line-height: 1.6;">
-      <h2>Your master is ready</h2>
-      <p>Your payment has been confirmed and your final master is now available.</p>
-      <p>
-        <a href="${downloadUrl}" style="display:inline-block;padding:12px 18px;background:#111;color:#fff;text-decoration:none;border-radius:999px;">
-          Download your final master
-        </a>
-      </p>
-      <p>This download link is temporary for security reasons.</p>
-      <p>CB Production</p>
+    <div style="font-family: Arial; line-height:1.6;">
+      <h2>Payment confirmed</h2>
+
+      <p>Your track has been successfully received and your payment is confirmed.</p>
+
+      <p>Your final master is now being crafted by CB Production.</p>
+
+      <p>You will receive your final master shortly.</p>
+
+      <br>
+
+      <p style="opacity:0.6;">CB Production</p>
     </div>
   `;
 
   await transporter.sendMail({
     from: GMAIL_USER,
     to,
-    subject: "CB Production - Your final master is ready",
+    subject: "CB Production - Mastering in progress",
     html
   });
 }
@@ -782,6 +784,9 @@ app.get('/status/:jobId', (req, res) => {
           readyView.classList.add('hidden');
           paidView.classList.add('hidden');
         }
+        if (data.status === 'paid') {
+          statusArea.innerHTML = '<p class="status-paid"><strong>Statut actuel :</strong> Mastering in progress by CB Production</p>';
+}
 
         if (data.status === 'preview_ready') {
           statusArea.innerHTML = '<p class="status-ready"><strong>Statut actuel :</strong> Preview prête à l\'écoute</p>';
@@ -1065,48 +1070,29 @@ app.post("/webhook", express.raw({ type: "application/json" }), async (req, res)
 
   console.log("✅ Event reçu :", event.type);
 
-  if (event.type === "checkout.session.completed") {
-    const session = event.data.object;
-    const projectId = session.metadata.projectId;
+ if (event.type === "checkout.session.completed") {
+  const session = event.data.object;
+  const projectId = session.metadata.projectId;
 
-    console.log("💰 Paiement validé pour projet:", projectId);
+  console.log("💰 Paiement validé pour projet:", projectId);
 
-    const inputKey = `uploads/${projectId}/original.wav`;
-    const masterKey = `masters/${projectId}/master.wav`;
+  const inputKey = `uploads/${projectId}/original.wav`;
 
-    const localInput = `./tmp/${projectId}-input.wav`;
-    const localOutput = `./tmp/${projectId}-master.wav`;
+  try {
+    const metadata = await getObjectMetadata(inputKey);
+    const clientEmail = metadata.Metadata?.email || metadata.metadata?.email;
 
-    try {
-      fs.mkdirSync("./tmp", { recursive: true });
-
-      await downloadFromS3(inputKey, localInput);
-      await generateFinalMaster(localInput, localOutput);
-      await uploadToS3(localOutput, masterKey, "audio/wav");
-
-      const url = await getSignedDownloadUrl(masterKey);
-      console.log("✅ MASTER PRÊT:", url);
-
-      const metadata = await getObjectMetadata(inputKey);
-      const clientEmail = metadata.Metadata?.email || metadata.metadata?.email;
-
-      if (clientEmail) {
-        await sendClientMasterEmail(clientEmail, url);
-        console.log("📧 Mail client envoyé à :", clientEmail);
-      } else {
-        console.log("⚠️ Aucun email trouvé pour ce projet.");
-      }
-
-      if (fs.existsSync(localInput)) fs.unlinkSync(localInput);
-      if (fs.existsSync(localOutput)) fs.unlinkSync(localOutput);
-
-    } catch (err) {
-      console.error("❌ Erreur post-paiement :", err);
-
-      if (fs.existsSync(localInput)) fs.unlinkSync(localInput);
-      if (fs.existsSync(localOutput)) fs.unlinkSync(localOutput);
+    if (clientEmail) {
+      await sendClientPaymentEmail(clientEmail, projectId);
+      console.log("📧 Mail confirmation envoyé à :", clientEmail);
+    } else {
+      console.log("⚠️ Aucun email trouvé");
     }
+
+  } catch (err) {
+    console.error("❌ Erreur post-paiement :", err);
   }
+}
 
   res.json({ received: true });
 });
