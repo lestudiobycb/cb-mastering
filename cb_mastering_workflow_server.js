@@ -28,7 +28,7 @@ const path = require("path");
 const crypto = require('crypto');
 const cors = require('cors');
 const { exec } = require('child_process');
-const { S3Client, PutObjectCommand, GetObjectCommand } = require("@aws-sdk/client-s3");
+const { S3Client, PutObjectCommand, GetObjectCommand, HeadObjectCommand } = require("@aws-sdk/client-s3");
 const { getSignedUrl } = require("@aws-sdk/s3-request-presigner");
 const Stripe = require("stripe");
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
@@ -203,6 +203,15 @@ async function getSignedDownloadUrl(key) {
   return await getSignedUrl(s3, command, { expiresIn: 3600 * 24 });
 }
 
+async function getObjectMetadata(key) {
+  const command = new HeadObjectCommand({
+    Bucket: process.env.AWS_BUCKET_NAME,
+    Key: key,
+  });
+
+  return await s3.send(command);
+}
+
 app.post("/generate-preview", async (req, res) => {
   const { projectId } = req.body;
 
@@ -375,6 +384,29 @@ async function sendStudioEmail(job) {
     from: GMAIL_USER,
     to: GMAIL_USER,
     subject: `Nouveau mastering - ${job.artistName} - ${job.projectTitle}`,
+    html
+  });
+}
+
+async function sendClientMasterEmail(to, downloadUrl) {
+  const html = `
+    <div style="font-family: Arial, Helvetica, sans-serif; color: #111; line-height: 1.6;">
+      <h2>Your master is ready</h2>
+      <p>Your payment has been confirmed and your final master is now available.</p>
+      <p>
+        <a href="${downloadUrl}" style="display:inline-block;padding:12px 18px;background:#111;color:#fff;text-decoration:none;border-radius:999px;">
+          Download your final master
+        </a>
+      </p>
+      <p>This download link is temporary for security reasons.</p>
+      <p>CB Production</p>
+    </div>
+  `;
+
+  await transporter.sendMail({
+    from: GMAIL_USER,
+    to,
+    subject: "CB Production - Your final master is ready",
     html
   });
 }
@@ -1045,15 +1077,35 @@ if (event.type === "checkout.session.completed") {
   const localInput = `./tmp/${projectId}-input.wav`;
   const localOutput = `./tmp/${projectId}-master.wav`;
 
-  await downloadFromS3(inputKey, localInput);
+  try {
+    fs.mkdirSync("./tmp", { recursive: true });
 
-  await generateFinalMaster(localInput, localOutput);
+    await downloadFromS3(inputKey, localInput);
+    await generateFinalMaster(localInput, localOutput);
+    await uploadToS3(localOutput, masterKey, "audio/wav");
 
-  await uploadToS3(localOutput, masterKey, "audio/wav");
+    const url = await getSignedDownloadUrl(masterKey);
+    console.log("✅ MASTER PRÊT:", url);
 
-  const url = await getSignedDownloadUrl(masterKey);
+    const metadata = await getObjectMetadata(inputKey);
+    const clientEmail = metadata.Metadata?.email;
 
-  console.log("✅ MASTER PRÊT:", url);
+    if (clientEmail) {
+      await sendClientMasterEmail(clientEmail, url);
+      console.log("📧 Mail client envoyé à :", clientEmail);
+    } else {
+      console.log("⚠️ Aucun email trouvé pour ce projet.");
+    }
+
+    if (fs.existsSync(localInput)) fs.unlinkSync(localInput);
+    if (fs.existsSync(localOutput)) fs.unlinkSync(localOutput);
+
+  } catch (err) {
+    console.error("❌ Erreur post-paiement :", err);
+
+    if (fs.existsSync(localInput)) fs.unlinkSync(localInput);
+    if (fs.existsSync(localOutput)) fs.unlinkSync(localOutput);
+  }
 }
 
   res.json({ received: true });
