@@ -958,6 +958,15 @@ app.post("/create-checkout-session", async (req, res) => {
   }
 });
 
+app.get("/test-stripe-env", (req, res) => {
+  res.json({
+    hasStripeKey: !!process.env.STRIPE_SECRET_KEY,
+    startsWith: process.env.STRIPE_SECRET_KEY
+      ? process.env.STRIPE_SECRET_KEY.slice(0, 7)
+      : null
+  });
+});
+
 app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
   console.log(`CB Mastering Workflow running on ${BASE_URL}`);
