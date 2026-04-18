@@ -92,6 +92,21 @@ function runCommand(command) {
   });
 }
 
+function generatePreview(inputPath, outputPath) {
+  return new Promise((resolve, reject) => {
+    const cmd = `ffmpeg -i "${inputPath}" -t 30 -q:a 4 "${outputPath}"`;
+
+    exec(cmd, (error) => {
+      if (error) {
+        console.error("FFmpeg error:", error);
+        reject(error);
+      } else {
+        resolve();
+      }
+    });
+  });
+}
+
 function jobsFilePath() {
   return path.join(DATA_DIR, 'jobs.json');
 }
@@ -788,6 +803,20 @@ app.get("/upload-test", async (req, res) => {
   } catch (error) {
     console.error("Erreur upload-test :", error);
     res.status(500).send("Erreur génération URL upload");
+  }
+});
+
+app.get("/test-preview", async (req, res) => {
+  try {
+    const input = "./uploads/test.wav";
+    const output = "./previews/test.mp3";
+
+    await generatePreview(input, output);
+
+    res.send("Preview généré !");
+  } catch (err) {
+    console.error(err);
+    res.status(500).send("Erreur preview");
   }
 });
 
