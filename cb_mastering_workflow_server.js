@@ -422,9 +422,8 @@ async function sendClientPaymentEmail(to, projectId) {
 }
 
 async function sendStudioPaidEmail(projectId, clientEmail) {
-  const originalFileUrl = `https://cb-mastering.onrender.com/uploads/${projectId}/original.wav`;
-  const adminUrl = `https://cb-mastering.onrender.com/admin`;
-  const statusUrl = `https://cb-mastering.onrender.com/status/${projectId}`;
+  const inputKey = `uploads/${projectId}/original.wav`;
+  const originalFileUrl = await getSignedDownloadUrl(inputKey);
 
   const html = `
     <div style="font-family: Arial; line-height:1.6;">
@@ -434,8 +433,6 @@ async function sendStudioPaidEmail(projectId, clientEmail) {
       <p>Le client a payé. Tu peux lancer le mastering maintenant.</p>
       <p>
         🎧 <a href="${originalFileUrl}">Download original file</a><br>
-        📊 <a href="${statusUrl}">Client status page</a><br>
-        ⚙️ <a href="${adminUrl}">Admin upload</a>
       </p>
       <p style="color:#888;">CB Production System</p>
     </div>
@@ -444,7 +441,7 @@ async function sendStudioPaidEmail(projectId, clientEmail) {
   await transporter.sendMail({
     from: GMAIL_USER,
     to: GMAIL_USER,
-    subject: `🔥 PAID MASTERING REQUIRED - ${projectId}`,
+    subject: `🔥 MASTER À FAIRE! - ${projectId}`,
     html
   });
 }
