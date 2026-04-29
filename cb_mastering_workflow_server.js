@@ -5,6 +5,8 @@ const cors = require("cors");
 const nodemailer = require("nodemailer");
 const { exec } = require("child_process");
 const Stripe = require("stripe");
+const { Resend } = require("resend");
+const resend = new Resend(process.env.RESEND_API_KEY);
 
 const {
   S3Client,
@@ -157,38 +159,33 @@ async function sendStudioNewMasteringEmail({
   originalFileUrl,
   previewUrl
 }) {
-  const html = `
-    <div style="font-family: Arial; line-height:1.6;">
-      <h2>🎧 Nouveau mastering à traiter</h2>
-
-      <p><strong>Project ID :</strong> ${projectId}</p>
-      <p><strong>Email client :</strong> ${clientEmail || "Non renseigné"}</p>
-
-      <hr>
-
-      <p><strong>Fichier original à masteriser :</strong></p>
-      <p><a href="${originalFileUrl}">Télécharger le fichier original</a></p>
-
-      <p><strong>Preview générée automatiquement :</strong></p>
-      <p><a href="${previewUrl}">Écouter / télécharger la preview</a></p>
-
-      <hr>
-
-      <p>
-        Une fois le paiement confirmé, retourne le master final au client via :
-        <br>
-        <strong>${clientEmail || "email client non disponible"}</strong>
-      </p>
-
-      <p style="color:#888;">CB Production System</p>
-    </div>
-  `;
-
-  await transporter.sendMail({
-    from: GMAIL_USER,
-    to: GMAIL_USER,
+  await resend.emails.send({
+    from: "CB Production <onboarding@resend.dev>",
+    to: "lestudiobycb@gmail.com",
     subject: `🎧 Nouveau mastering CB - ${clientEmail || projectId}`,
-    html
+    html: `
+      <div style="font-family: Arial; line-height:1.6;">
+        <h2>🎧 Nouveau mastering à traiter</h2>
+
+        <p><strong>Project ID :</strong> ${projectId}</p>
+        <p><strong>Email client :</strong> ${clientEmail || "Non renseigné"}</p>
+
+        <hr>
+
+        <p><strong>Fichier original à masteriser :</strong></p>
+        <p><a href="${originalFileUrl}">Télécharger le fichier original</a></p>
+
+        <p><strong>Preview générée automatiquement :</strong></p>
+        <p><a href="${previewUrl}">Écouter / télécharger la preview</a></p>
+
+        <hr>
+
+        <p>Retourner le master final à :</p>
+        <p><strong>${clientEmail || "email client non disponible"}</strong></p>
+
+        <p style="color:#888;">CB Production System</p>
+      </div>
+    `
   });
 }
 
