@@ -311,12 +311,14 @@ app.post("/generate-preview", async (req, res) => {
     const originalFileUrl = await getSignedDownloadUrl(inputKey);
     const previewUrl = await getSignedDownloadUrl(previewKey);
 
-    await sendStudioNewMasteringEmail({
-      projectId,
-      clientEmail,
-      originalFileUrl,
-      previewUrl
-    });
+    sendStudioNewMasteringEmail({
+  projectId,
+  clientEmail,
+  originalFileUrl,
+  previewUrl
+}).catch((mailErr) => {
+  console.error("❌ studio email error:", mailErr.message);
+});
 
     if (fs.existsSync(localInput)) fs.unlinkSync(localInput);
     if (fs.existsSync(localOutput)) fs.unlinkSync(localOutput);
