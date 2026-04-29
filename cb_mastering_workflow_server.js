@@ -1,24 +1,5 @@
 // CB Mastering Workflow - starter server
 // ------------------------------------------------------------
-// Ce fichier crée un mini système complet :
-// 1) page client d'envoi
-// 2) analyse audio FFmpeg pour calculer un gain recommandé
-// 3) envoi d'un email à lestudiobycb@gmail.com avec les infos
-// 4) page de suivi "en attente de mastering"
-// 5) endpoint admin pour uploader un preview/master plus tard
-// 6) page client mise à jour avec player + bouton de paiement quand le master est prêt
-//
-// AVERTISSEMENT:
-// - C'est un starter MVP, pas un produit final blindé sécurité.
-// - Pour l'email Gmail, crée un mot de passe d'application Google.
-// - Pour le paiement, remplace STRIPE_PAYMENT_LINK par ton vrai lien Stripe.
-//
-// INSTALLATION
-// npm init -y
-// npm install express multer nodemailer cors
-// FFmpeg doit être installé sur la machine
-// node server.js
-// ------------------------------------------------------------
 
 const express = require('express');
 const multer = require('multer');
@@ -31,6 +12,7 @@ const { exec } = require('child_process');
 const { S3Client, PutObjectCommand, GetObjectCommand, HeadObjectCommand } = require("@aws-sdk/client-s3");
 const { getSignedUrl } = require("@aws-sdk/s3-request-presigner");
 const Stripe = require("stripe");
+
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
 
 const app = express();
@@ -40,7 +22,9 @@ const BASE_URL = process.env.BASE_URL || `http://localhost:${PORT}`;
 const ADMIN_KEY = process.env.ADMIN_KEY || 'change-me';
 const GMAIL_USER = process.env.GMAIL_USER || 'lestudiobycb@gmail.com';
 const GMAIL_APP_PASSWORD = process.env.GMAIL_APP_PASSWORD || 'PUT_GMAIL_APP_PASSWORD_HERE';
+
 const STRIPE_PAYMENT_LINK = process.env.STRIPE_PAYMENT_LINK || 'https://buy.stripe.com/dRm9AU9ETfdB289dCpcfK0d';
+
 const s3 = new S3Client({
   region: process.env.AWS_REGION,
   credentials: {
@@ -59,9 +43,8 @@ for (const dir of [DATA_DIR, UPLOAD_DIR, MASTER_DIR, PREVIEW_DIR]) {
   if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
 }
 
-app.use(cors({
-  origin: "*"
-}));
+app.use(cors({ origin: "*" }));
+
 app.use((req, res, next) => {
   if (req.originalUrl === "/webhook") {
     next();
@@ -69,6 +52,7 @@ app.use((req, res, next) => {
     express.json({ limit: "10mb" })(req, res, next);
   }
 });
+
 app.use(express.urlencoded({ extended: true }));
 app.use('/masters', express.static(MASTER_DIR));
 app.use('/previews', express.static(PREVIEW_DIR));
@@ -169,9 +153,40 @@ async function uploadToS3(localPath, key, contentType) {
   await s3.send(command);
 }
 
+async function getSignedDownloadUrl(key) {
+  const command = new GetObjectCommand({
+    Bucket: process.env.AWS_BUCKET_NAME,
+    Key: key,
+  });
+
+  return await getSignedUrl(s3, command, { expiresIn: 3600 * 24 });
+}
+
+async function getObjectMetadata(key) {
+  const command = new HeadObjectCommand({
+    Bucket: process.env.AWS_BUCKET_NAME,
+    Key: key,
+  });
+
+  return await s3.send(command);
+}
+
+function buildStripePaymentLink(projectId, email = "") {
+  const url = new URL(STRIPE_PAYMENT_LINK);
+
+  url.searchParams.set("client_reference_id", projectId);
+
+  if (email) {
+    url.searchParams.set("prefilled_email", email);
+  }
+
+  return url.toString();
+}
+
 app.post("/create-project", async (req, res) => {
   try {
     console.log("📦 CREATE-PROJECT BODY:", req.body);
+
     const projectId = crypto.randomUUID();
     const key = `uploads/${projectId}/original.wav`;
 
@@ -201,24 +216,6 @@ app.post("/create-project", async (req, res) => {
     });
   }
 });
-
-async function getSignedDownloadUrl(key) {
-  const command = new GetObjectCommand({
-    Bucket: process.env.AWS_BUCKET_NAME,
-    Key: key,
-  });
-
-  return await getSignedUrl(s3, command, { expiresIn: 3600 * 24 });
-}
-
-async function getObjectMetadata(key) {
-  const command = new HeadObjectCommand({
-    Bucket: process.env.AWS_BUCKET_NAME,
-    Key: key,
-  });
-
-  return await s3.send(command);
-}
 
 app.post("/generate-preview", async (req, res) => {
   const { projectId } = req.body;
@@ -307,8 +304,6 @@ function extractLoudnormJson(stderrText) {
 }
 
 function computeRecommendedGain(inputLufs, truePeak, lra) {
-  // Réglage de départ pour ton template Logic, pas un gain final absolu.
-  // Idée: rester prudent pour éviter de suralimenter ta chaîne.
   let gain = 0;
 
   if (inputLufs <= -22) gain = 7.0;
@@ -318,11 +313,9 @@ function computeRecommendedGain(inputLufs, truePeak, lra) {
   else if (inputLufs <= -14) gain = 2.5;
   else gain = 1.0;
 
-  // Si le true peak est déjà très haut, on calme le gain recommandé.
   if (truePeak > -2.0) gain -= 1.5;
   else if (truePeak > -3.5) gain -= 0.8;
 
-  // Si la dynamique est déjà serrée, on reste un peu prudent.
   if (lra < 4) gain -= 0.5;
 
   return Math.max(0, Number(gain.toFixed(1)));
@@ -334,7 +327,7 @@ async function analyzeTrack(filePath) {
   const analysis = extractLoudnormJson(result.stderr);
 
   if (!analysis) {
-    throw new Error('Impossible de lire l\'analyse loudnorm.');
+    throw new Error("Impossible de lire l'analyse loudnorm.");
   }
 
   const inputLufs = Number(parseFloat(analysis.input_i).toFixed(2));
@@ -400,15 +393,10 @@ async function sendClientPaymentEmail(to, projectId) {
   const html = `
     <div style="font-family: Arial; line-height:1.6;">
       <h2>Payment confirmed</h2>
-
       <p>Your track has been successfully received and your payment is confirmed.</p>
-
       <p>Your final master is now being crafted by CB Production.</p>
-
       <p>You will receive your final master shortly.</p>
-
       <br>
-
       <p style="opacity:0.6;">CB Production</p>
     </div>
   `;
@@ -431,9 +419,7 @@ async function sendStudioPaidEmail(projectId, clientEmail) {
       <p><strong>Project ID:</strong> ${projectId}</p>
       <p><strong>Client email:</strong> ${clientEmail}</p>
       <p>Le client a payé. Tu peux lancer le mastering maintenant.</p>
-      <p>
-        🎧 <a href="${originalFileUrl}">Download original file</a><br>
-      </p>
+      <p>🎧 <a href="${originalFileUrl}">Download original file</a></p>
       <p style="color:#888;">CB Production System</p>
     </div>
   `;
@@ -553,8 +539,16 @@ function htmlLayout(content, title = 'CB Studio') {
       .small { font-size: 13px; color: rgba(255,255,255,.6); }
       a { color: #d0bd94; }
       .logo {
-        width: 56px; height: 56px; border-radius: 16px; display:flex; align-items:center; justify-content:center;
-        background: linear-gradient(135deg, #d0bd94, #92743b); color:#000; font-weight:900; margin-bottom:18px;
+        width: 56px;
+        height: 56px;
+        border-radius: 16px;
+        display:flex;
+        align-items:center;
+        justify-content:center;
+        background: linear-gradient(135deg, #d0bd94, #92743b);
+        color:#000;
+        font-weight:900;
+        margin-bottom:18px;
       }
       @media (max-width: 740px) {
         .grid-2, .info-grid { grid-template-columns: 1fr; }
@@ -770,7 +764,7 @@ app.get('/status/:jobId', (req, res) => {
           <audio controls id="previewPlayer"></audio>
           <div class="section">
             <button id="buyButton">Payer et débloquer le master</button>
-            <p class="small">Après paiement, vous pourrez recevoir le master final.</p>
+            <p class="small">Après paiement, vous recevrez le master final.</p>
           </div>
         </div>
 
@@ -798,8 +792,29 @@ app.get('/status/:jobId', (req, res) => {
       const buyButton = document.getElementById('buyButton');
       const downloadMaster = document.getElementById('downloadMaster');
 
-      buyButton.addEventListener('click', () => {
-        window.location.href = ${JSON.stringify(STRIPE_PAYMENT_LINK)} + '?prefilled_email=' + encodeURIComponent(${JSON.stringify(job.email)});
+      buyButton.addEventListener('click', async () => {
+        try {
+          const response = await fetch('/create-checkout-session', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+              projectId: jobId,
+              email: ${JSON.stringify(job.email)}
+            })
+          });
+
+          const data = await response.json();
+
+          if (!response.ok) {
+            throw new Error(data.error || 'Erreur paiement');
+          }
+
+          window.location.href = data.url;
+        } catch (error) {
+          alert('Erreur paiement : ' + error.message);
+        }
       });
 
       async function refreshStatus() {
@@ -817,23 +832,28 @@ app.get('/status/:jobId', (req, res) => {
           readyView.classList.add('hidden');
           paidView.classList.add('hidden');
         }
-        if (data.status === 'paid') {
-          statusArea.innerHTML = '<p class="status-paid"><strong>Statut actuel :</strong> Mastering in progress by CB Production</p>';
-}
 
         if (data.status === 'preview_ready') {
-          statusArea.innerHTML = '<p class="status-ready"><strong>Statut actuel :</strong> Preview prête à l\'écoute</p>';
+          statusArea.innerHTML = '<p class="status-ready"><strong>Statut actuel :</strong> Preview prête à l\\'écoute</p>';
           waitingView.classList.add('hidden');
           readyView.classList.remove('hidden');
           paidView.classList.add('hidden');
           if (data.previewUrl) previewPlayer.src = data.previewUrl;
         }
 
-        if (data.status === 'paid' || data.status === 'master_ready') {
+        if (data.status === 'paid') {
+          statusArea.innerHTML = '<p class="status-paid"><strong>Statut actuel :</strong> Mastering in progress by CB Production</p>';
+          waitingView.classList.add('hidden');
+          readyView.classList.add('hidden');
+          paidView.classList.remove('hidden');
+        }
+
+        if (data.status === 'master_ready') {
           statusArea.innerHTML = '<p class="status-paid"><strong>Statut actuel :</strong> Master débloqué</p>';
           waitingView.classList.add('hidden');
           readyView.classList.add('hidden');
           paidView.classList.remove('hidden');
+
           if (data.masterUrl) {
             masterPlayer.src = data.masterUrl;
             downloadMaster.href = data.masterUrl;
@@ -846,11 +866,6 @@ app.get('/status/:jobId', (req, res) => {
     </script>
   `, `Suivi - ${job.projectTitle}`));
 });
-
-// ------------------------------------------------------------
-// ADMIN - upload manuel de la preview ou du master final
-// Tu utilises ça après avoir masterisé dans Logic.
-// ------------------------------------------------------------
 
 app.get('/admin', (req, res) => {
   res.send(htmlLayout(`
@@ -946,7 +961,7 @@ app.post('/api/admin/upload-result', upload.single('audioFile'), async (req, res
       if (fileType === 'preview') {
         next.previewUrl = publicUrl;
         next.status = 'preview_ready';
-        next.notes = 'Preview prête à l\'écoute.';
+        next.notes = "Preview prête à l'écoute.";
       }
 
       if (fileType === 'master') {
@@ -958,18 +973,19 @@ app.post('/api/admin/upload-result', upload.single('audioFile'), async (req, res
       return next;
     });
 
-    return res.json({ success: true, jobId: updatedJob.id, status: updatedJob.status });
+    return res.json({
+      success: true,
+      jobId: updatedJob.id,
+      status: updatedJob.status
+    });
   } catch (error) {
     console.error(error);
-    return res.status(500).json({ error: 'Upload résultat impossible.', details: error.message });
+    return res.status(500).json({
+      error: 'Upload résultat impossible.',
+      details: error.message
+    });
   }
 });
-
-// ------------------------------------------------------------
-// ADMIN - marquer un projet comme payé
-// En V1: tu peux le faire manuellement après Stripe.
-// Plus tard: tu brancheras un vrai webhook Stripe.
-// ------------------------------------------------------------
 
 app.post('/api/admin/mark-paid', (req, res) => {
   const { adminKey, jobId } = req.body;
@@ -989,7 +1005,11 @@ app.post('/api/admin/mark-paid', (req, res) => {
     return res.status(404).json({ error: 'Projet introuvable.' });
   }
 
-  res.json({ success: true, jobId: job.id, status: job.status });
+  res.json({
+    success: true,
+    jobId: job.id,
+    status: job.status
+  });
 });
 
 app.get('/health', (req, res) => {
@@ -1037,40 +1057,35 @@ app.get("/test-preview", async (req, res) => {
 
 app.post("/create-checkout-session", async (req, res) => {
   try {
-    const { projectId } = req.body;
+    const { projectId, email } = req.body;
 
     if (!projectId) {
-      return res.status(400).send("projectId manquant");
+      return res.status(400).json({
+        error: "projectId manquant"
+      });
     }
 
-    const session = await stripe.checkout.sessions.create({
-      payment_method_types: ["card"],
-      mode: "payment",
-      line_items: [
-        {
-          price_data: {
-            currency: "eur",
-            product_data: {
-              name: "CB Mastering - Full Master"
-            },
-            unit_amount: 890
-          },
-          quantity: 1
-        }
-      ],
-      metadata: {
-        projectId
-      },
-      success_url: `https://www.cb-prod.com/master-success`,
-      cancel_url: `https://www.cb-prod.com/cancel`,
-    });
+    let clientEmail = email || "";
 
-    res.json({ url: session.url });
+    if (!clientEmail) {
+      try {
+        const inputKey = `uploads/${projectId}/original.wav`;
+        const metadata = await getObjectMetadata(inputKey);
+        clientEmail = metadata.Metadata?.email || "";
+      } catch (err) {
+        console.warn("⚠️ Impossible de récupérer l'email depuis S3 :", err.message);
+      }
+    }
+
+    const paymentUrl = buildStripePaymentLink(projectId, clientEmail);
+
+    res.json({
+      url: paymentUrl
+    });
   } catch (err) {
-  console.error("Stripe error full:", err);
-  res.status(500).json({
-    error: err.message,
-    type: err.type || null
+    console.error("Payment link error:", err);
+    res.status(500).json({
+      error: err.message
     });
   }
 });
@@ -1080,7 +1095,8 @@ app.get("/test-stripe-env", (req, res) => {
     hasStripeKey: !!process.env.STRIPE_SECRET_KEY,
     startsWith: process.env.STRIPE_SECRET_KEY
       ? process.env.STRIPE_SECRET_KEY.slice(0, 7)
-      : null
+      : null,
+    paymentLink: STRIPE_PAYMENT_LINK
   });
 });
 
@@ -1103,30 +1119,49 @@ app.post("/webhook", express.raw({ type: "application/json" }), async (req, res)
 
   console.log("✅ Event reçu :", event.type);
 
- if (event.type === "checkout.session.completed") {
-  const session = event.data.object;
-  const projectId = session.metadata.projectId;
+  if (event.type === "checkout.session.completed") {
+    const session = event.data.object;
 
-  console.log("💰 Paiement validé pour projet:", projectId);
+    const projectId =
+      session.client_reference_id ||
+      session.metadata?.projectId ||
+      null;
 
-  const inputKey = `uploads/${projectId}/original.wav`;
+    console.log("💰 Paiement validé pour projet:", projectId);
 
-  try {
-    const metadata = await getObjectMetadata(inputKey);
-    const clientEmail = metadata.Metadata?.email || metadata.metadata?.email;
+    if (!projectId) {
+      console.log("⚠️ Aucun projectId trouvé dans la session Stripe.");
+      return res.json({ received: true });
+    }
 
-   if (clientEmail) {
-  await sendClientPaymentEmail(clientEmail, projectId);
-  await sendStudioPaidEmail(projectId, clientEmail);
-  console.log("📧 Mails envoyés : client + studio");
-} else {
-  console.log("⚠️ Aucun email trouvé pour ce projet.");
-}
+    const inputKey = `uploads/${projectId}/original.wav`;
 
-  } catch (err) {
-    console.error("❌ Erreur post-paiement :", err);
+    try {
+      const metadata = await getObjectMetadata(inputKey);
+      const clientEmail = metadata.Metadata?.email || metadata.metadata?.email || session.customer_details?.email || session.customer_email;
+
+      const job = updateJob(projectId, (existing) => {
+        const next = { ...existing };
+        next.paid = true;
+        next.status = 'paid';
+        return next;
+      });
+
+      if (!job) {
+        console.log("⚠️ Aucun job local trouvé pour ce projectId. Ce n'est pas bloquant si le flux S3 est utilisé.");
+      }
+
+      if (clientEmail) {
+        await sendClientPaymentEmail(clientEmail, projectId);
+        await sendStudioPaidEmail(projectId, clientEmail);
+        console.log("📧 Mails envoyés : client + studio");
+      } else {
+        console.log("⚠️ Aucun email trouvé pour ce projet.");
+      }
+    } catch (err) {
+      console.error("❌ Erreur post-paiement :", err);
+    }
   }
-}
 
   res.json({ received: true });
 });
