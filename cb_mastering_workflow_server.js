@@ -1,12 +1,8 @@
 const express = require("express");
-const fs = require("fs");
 const crypto = require("crypto");
 const cors = require("cors");
 const nodemailer = require("nodemailer");
-const { exec } = require("child_process");
 const Stripe = require("stripe");
-const { Resend } = require("resend");
-const resend = new Resend(process.env.RESEND_API_KEY);
 
 const {
   S3Client,
@@ -28,6 +24,12 @@ const STRIPE_PAYMENT_LINK =
 
 const GMAIL_USER = process.env.GMAIL_USER || "lestudiobycb@gmail.com";
 const GMAIL_APP_PASSWORD = process.env.GMAIL_APP_PASSWORD;
+const STUDIO_EMAIL = "lestudiobycb@gmail.com";
+
+const ABBY_API_KEY = process.env.ABBY_API_KEY;
+const ABBY_BASE_URL = process.env.ABBY_BASE_URL || "https://api.app-abby.com";
+
+const MASTERING_PRICE = Number(process.env.MASTERING_PRICE || 9);
 
 const s3 = new S3Client({
   region: process.env.AWS_REGION,
@@ -59,71 +61,7 @@ const transporter = nodemailer.createTransport({
   }
 });
 
-function runCommand(command) {
-  return new Promise((resolve, reject) => {
-    exec(command, (error, stdout, stderr) => {
-      if (error) reject(new Error(stderr || error.message));
-      else resolve({ stdout, stderr });
-    });
-  });
-}
-
-function getAudioDuration(filePath) {
-  return new Promise((resolve, reject) => {
-    exec(
-      `ffprobe -i "${filePath}" -show_entries format=duration -v quiet -of csv="p=0"`,
-      (err, stdout) => {
-        if (err) return reject(err);
-        resolve(parseFloat(stdout));
-      }
-    );
-  });
-}
-
-async function generatePreview(inputPath, outputPath) {
-  const duration = await getAudioDuration(inputPath);
-
-  let start = 0;
-
-  if (duration > 40) {
-    start = Math.floor(duration / 2 - 15);
-  }
-
-  const cmd = `ffmpeg -y -ss ${start} -i "${inputPath}" -t 30 -af "highpass=f=25,lowpass=f=18500,acompressor=threshold=-18dB:ratio=2:attack=15:release=120,alimiter=limit=-2.0dB" -q:a 4 "${outputPath}"`;
-
-  return runCommand(cmd);
-}
-
-async function downloadFromS3(key, localPath) {
-  const command = new GetObjectCommand({
-    Bucket: process.env.AWS_BUCKET_NAME,
-    Key: key
-  });
-
-  const response = await s3.send(command);
-  const stream = fs.createWriteStream(localPath);
-
-  return new Promise((resolve, reject) => {
-    response.Body.pipe(stream);
-    response.Body.on("error", reject);
-    stream.on("finish", resolve);
-  });
-}
-
-async function uploadToS3(localPath, key, contentType) {
-  const fileStream = fs.createReadStream(localPath);
-
-  const command = new PutObjectCommand({
-    Bucket: process.env.AWS_BUCKET_NAME,
-    Key: key,
-    Body: fileStream,
-    ContentType: contentType
-  });
-
-  await s3.send(command);
-}
-
-async function getSignedDownloadUrl(key, expiresIn = 3600 * 24) {
+async function getSignedDownloadUrl(key, expiresIn = 3600 * 24 * 7) {
   const command = new GetObjectCommand({
     Bucket: process.env.AWS_BUCKET_NAME,
     Key: key
@@ -141,6 +79,33 @@ async function getObjectMetadata(key) {
   return s3.send(command);
 }
 
+async function getJsonFromS3(key) {
+  const command = new GetObjectCommand({
+    Bucket: process.env.AWS_BUCKET_NAME,
+    Key: key
+  });
+
+  const response = await s3.send(command);
+
+  const chunks = [];
+  for await (const chunk of response.Body) {
+    chunks.push(chunk);
+  }
+
+  return JSON.parse(Buffer.concat(chunks).toString("utf-8"));
+}
+
+async function putJsonToS3(key, data) {
+  const command = new PutObjectCommand({
+    Bucket: process.env.AWS_BUCKET_NAME,
+    Key: key,
+    Body: JSON.stringify(data, null, 2),
+    ContentType: "application/json"
+  });
+
+  await s3.send(command);
+}
+
 function buildStripePaymentLink(projectId, email = "") {
   const url = new URL(STRIPE_PAYMENT_LINK);
 
@@ -153,142 +118,306 @@ function buildStripePaymentLink(projectId, email = "") {
   return url.toString();
 }
 
-async function sendStudioNewMasteringEmail({
-  projectId,
-  clientEmail,
-  originalFileUrl,
-  previewUrl
-}) {
-  await resend.emails.send({
-    from: "CB Production <onboarding@resend.dev>",
-    to: "lestudiobycb@gmail.com",
-    subject: `🎧 Nouveau mastering CB - ${clientEmail || projectId}`,
-    html: `
-      <div style="font-family: Arial; line-height:1.6;">
-        <h2>🎧 Nouveau mastering à traiter</h2>
+async function abbyRequest(path, options = {}) {
+  if (!ABBY_API_KEY) {
+    throw new Error("ABBY_API_KEY manquante");
+  }
 
-        <p><strong>Project ID :</strong> ${projectId}</p>
-        <p><strong>Email client :</strong> ${clientEmail || "Non renseigné"}</p>
+  const response = await fetch(`${ABBY_BASE_URL}${path}`, {
+    ...options,
+    headers: {
+      Authorization: `Bearer ${ABBY_API_KEY}`,
+      Accept: "*/*",
+      "Content-Type": "application/json",
+      ...(options.headers || {})
+    }
+  });
 
-        <hr>
+  const text = await response.text();
 
-        <p><strong>Fichier original à masteriser :</strong></p>
-        <p><a href="${originalFileUrl}">Télécharger le fichier original</a></p>
+  let data;
+  try {
+    data = text ? JSON.parse(text) : null;
+  } catch {
+    data = text;
+  }
 
-        <p><strong>Preview générée automatiquement :</strong></p>
-        <p><a href="${previewUrl}">Écouter / télécharger la preview</a></p>
+  if (!response.ok) {
+    throw new Error(`Abby API ${response.status}: ${text}`);
+  }
 
-        <hr>
+  return data;
+}
 
-        <p>Retourner le master final à :</p>
-        <p><strong>${clientEmail || "email client non disponible"}</strong></p>
+async function abbyDownloadPdf(invoiceId) {
+  if (!ABBY_API_KEY) {
+    throw new Error("ABBY_API_KEY manquante");
+  }
 
-        <p style="color:#888;">CB Production System</p>
-      </div>
-    `
+  const response = await fetch(
+    `${ABBY_BASE_URL}/v2/billing/${invoiceId}/download?locale=fr`,
+    {
+      method: "GET",
+      headers: {
+        Authorization: `Bearer ${ABBY_API_KEY}`,
+        Accept: "application/pdf"
+      }
+    }
+  );
+
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(`Téléchargement facture Abby impossible: ${response.status} ${text}`);
+  }
+
+  const arrayBuffer = await response.arrayBuffer();
+  return Buffer.from(arrayBuffer);
+}
+
+async function createAbbyContact({ email }) {
+  const name = email?.split("@")[0] || "Client";
+  const safeName = name.replace(/[._-]/g, " ");
+
+  return abbyRequest("/contact", {
+    method: "POST",
+    body: JSON.stringify({
+      firstname: safeName || "Client",
+      lastname: "CB Mastering",
+      emails: [email],
+      notes: "Client créé automatiquement depuis CB Mastering",
+      language: "fr",
+      currency: "EUR"
+    })
   });
 }
 
-async function sendClientPaymentEmail(to, projectId) {
+async function createAbbyInvoice({ customerId, projectId, amount }) {
+  const invoice = await abbyRequest(`/v2/billing/invoice/${customerId}`, {
+    method: "POST",
+    body: JSON.stringify({})
+  });
+
+  const invoiceId = invoice.id;
+
+  if (!invoiceId) {
+    throw new Error("Abby n’a pas retourné d’ID de facture");
+  }
+
+  await abbyRequest(`/v2/billing/${invoiceId}/lines`, {
+    method: "PATCH",
+    body: JSON.stringify({
+      lines: [
+        {
+          designation: "Mastering automatique CB Production",
+          description: `Mastering automatique en ligne - Projet ${projectId}`,
+          reference: `CB-MASTER-${projectId}`,
+          quantity: 1,
+          quantityUnit: "unit",
+          unitPrice: amount,
+          unitPriceHT: amount,
+          type: "commercial_or_craft_services"
+        }
+      ]
+    })
+  });
+
+  const finalized = await abbyRequest(`/v2/billing/${invoiceId}/finalize`, {
+    method: "PATCH",
+    body: JSON.stringify({})
+  });
+
+  return finalized || invoice;
+}
+
+async function createAbbyInvoiceForPayment({ projectId, clientEmail, amount }) {
+  const contact = await createAbbyContact({ email: clientEmail });
+
+  const contactId = contact.id;
+
+  if (!contactId) {
+    throw new Error("Abby n’a pas retourné d’ID client");
+  }
+
+  const invoice = await createAbbyInvoice({
+    customerId: contactId,
+    projectId,
+    amount
+  });
+
+  const invoiceId = invoice.id;
+
+  const invoicePdfBuffer = await abbyDownloadPdf(invoiceId);
+
+  return {
+    contactId,
+    invoiceId,
+    invoice,
+    invoicePdfBuffer
+  };
+}
+
+async function createMasteringJob({ projectId, preset, clientEmail }) {
+  const job = {
+    id: projectId,
+    status: "waiting_preview",
+    preset: preset || "warm",
+    clientEmail: clientEmail || "",
+    inputKey: `uploads/${projectId}/original.wav`,
+    previewKey: `previews/${projectId}/preview.wav`,
+    masterKey: `masters/${projectId}/master.wav`,
+    paid: false,
+    createdAt: new Date().toISOString()
+  };
+
+  await putJsonToS3(`jobs/${projectId}.json`, job);
+
+  return job;
+}
+
+async function markJobAsPaid(projectId, clientEmail, extra = {}) {
+  const jobKey = `jobs/${projectId}.json`;
+
+  let job;
+
+  try {
+    job = await getJsonFromS3(jobKey);
+  } catch {
+    job = {
+      id: projectId,
+      status: "paid_no_preview_job",
+      preset: "warm",
+      clientEmail: clientEmail || "",
+      inputKey: `uploads/${projectId}/original.wav`,
+      previewKey: `previews/${projectId}/preview.wav`,
+      masterKey: `masters/${projectId}/master.wav`,
+      createdAt: new Date().toISOString()
+    };
+  }
+
+  const updatedJob = {
+    ...job,
+    ...extra,
+    paid: true,
+    clientEmail: clientEmail || job.clientEmail || "",
+    paidAt: new Date().toISOString(),
+    status: "paid_master_delivered"
+  };
+
+  await putJsonToS3(jobKey, updatedJob);
+
+  return updatedJob;
+}
+
+async function sendClientFinalEmail({
+  to,
+  projectId,
+  masterUrl,
+  invoicePdfBuffer,
+  invoiceId
+}) {
   const html = `
-    <div style="font-family: Arial; line-height:1.6;">
-      <h2>Paiement confirmé</h2>
-      <p>Votre titre a bien été reçu et votre paiement est confirmé.</p>
-      <p>Le master final est maintenant en cours de traitement par CB Production.</p>
-      <p>Vous recevrez votre master directement par email dès qu'il sera prêt.</p>
+    <div style="font-family: Arial, sans-serif; line-height:1.6; color:#111;">
+      <h2>Votre master est prêt 🎧</h2>
+
+      <p>Merci pour votre commande.</p>
+
+      <p>
+        Votre master final est disponible ici :
+      </p>
+
+      <p>
+        <a href="${masterUrl}" style="display:inline-block;padding:12px 18px;background:#d9903d;color:#fff;text-decoration:none;font-weight:bold;">
+          Télécharger le master final
+        </a>
+      </p>
+
+      <p><strong>Référence projet :</strong> ${projectId}</p>
+      <p><strong>Facture Abby :</strong> ${invoiceId || "jointe à cet email"}</p>
+
+      <p>
+        La facture est jointe à cet email au format PDF.
+      </p>
+
       <br>
-      <p style="opacity:0.6;">CB Production</p>
+
+      <p style="opacity:0.65;">
+        Merci pour votre confiance,<br>
+        CB Production
+      </p>
     </div>
   `;
 
   await transporter.sendMail({
-    from: GMAIL_USER,
+    from: `"CB Production" <${GMAIL_USER}>`,
     to,
-    subject: "CB Production - Mastering en cours",
-    html
+    subject: "CB Production - Votre master est prêt",
+    html,
+    attachments: invoicePdfBuffer
+      ? [
+          {
+            filename: `facture-cb-production-${projectId}.pdf`,
+            content: invoicePdfBuffer,
+            contentType: "application/pdf"
+          }
+        ]
+      : []
   });
 }
 
-async function sendStudioPaidEmail(projectId, clientEmail) {
+async function sendStudioPaidEmail({
+  projectId,
+  clientEmail,
+  masterUrl,
+  invoiceId
+}) {
   const inputKey = `uploads/${projectId}/original.wav`;
+  const previewKey = `previews/${projectId}/preview.wav`;
+  const masterKey = `masters/${projectId}/master.wav`;
+
   const originalFileUrl = await getSignedDownloadUrl(inputKey);
 
+  let previewUrl = "";
+  try {
+    await getObjectMetadata(previewKey);
+    previewUrl = await getSignedDownloadUrl(previewKey);
+  } catch {
+    previewUrl = "";
+  }
+
   const html = `
-    <div style="font-family: Arial; line-height:1.6;">
-      <h2>🔥 MASTERING PAYÉ</h2>
+    <div style="font-family: Arial, sans-serif; line-height:1.6; color:#111;">
+      <h2>🔥 MASTERING PAYÉ ET LIVRÉ</h2>
 
       <p><strong>Project ID :</strong> ${projectId}</p>
       <p><strong>Email client :</strong> ${clientEmail || "Non renseigné"}</p>
+      <p><strong>Facture Abby :</strong> ${invoiceId || "non créée"}</p>
 
-      <p>Le client a payé. Tu peux lancer le mastering final.</p>
+      <hr>
 
-      <p>
-        🎧 <a href="${originalFileUrl}">Télécharger le fichier original à masteriser</a>
-      </p>
+      <p><strong>Fichier original :</strong></p>
+      <p><a href="${originalFileUrl}">Télécharger le fichier original</a></p>
 
-      <p>
-        Retourner le master final à :
-        <br>
-        <strong>${clientEmail || "email client non disponible"}</strong>
-      </p>
+      ${
+        previewUrl
+          ? `<p><strong>Preview :</strong></p><p><a href="${previewUrl}">Écouter / télécharger la preview</a></p>`
+          : `<p><strong>Preview :</strong> introuvable.</p>`
+      }
+
+      <p><strong>Master final :</strong></p>
+      <p><a href="${masterUrl}">Télécharger le master final</a></p>
+
+      <p><strong>Master key S3 :</strong> ${masterKey}</p>
 
       <p style="color:#888;">CB Production System</p>
     </div>
   `;
 
   await transporter.sendMail({
-    from: GMAIL_USER,
-    to: GMAIL_USER,
-    subject: `🔥 MASTER PAYÉ À FAIRE - ${clientEmail || projectId}`,
+    from: `"CB Production System" <${GMAIL_USER}>`,
+    to: STUDIO_EMAIL,
+    subject: `✅ MASTER LIVRÉ - ${clientEmail || projectId}`,
     html
   });
-}
-
-async function createMasteringJob({ projectId, preset, clientEmail }) {
-  const job = {
-    id: projectId,
-    status: "waiting_preview",
-    preset: preset || "warm",
-    clientEmail: clientEmail || "",
-    inputKey: `uploads/${projectId}/original.wav`,
-    previewKey: `previews/${projectId}/preview.wav`,
-    masterKey: `masters/${projectId}/master.wav`,
-    createdAt: new Date().toISOString()
-  };
-
-  const command = new PutObjectCommand({
-    Bucket: process.env.AWS_BUCKET_NAME,
-    Key: `jobs/${projectId}.json`,
-    Body: JSON.stringify(job, null, 2),
-    ContentType: "application/json"
-  });
-
-  await s3.send(command);
-
-  return job;
-}
-
-async function createMasteringJob({ projectId, preset, clientEmail }) {
-  const job = {
-    id: projectId,
-    status: "waiting_preview",
-    preset: preset || "warm",
-    clientEmail: clientEmail || "",
-    inputKey: `uploads/${projectId}/original.wav`,
-    previewKey: `previews/${projectId}/preview.wav`,
-    masterKey: `masters/${projectId}/master.wav`,
-    createdAt: new Date().toISOString()
-  };
-
-  const command = new PutObjectCommand({
-    Bucket: process.env.AWS_BUCKET_NAME,
-    Key: `jobs/${projectId}.json`,
-    Body: JSON.stringify(job, null, 2),
-    ContentType: "application/json"
-  });
-
-  await s3.send(command);
-  return job;
 }
 
 app.post("/create-project", async (req, res) => {
@@ -369,7 +498,6 @@ app.get("/preview/:projectId", async (req, res) => {
 
     const key = `previews/${projectId}/preview.wav`;
 
-    // Vérifie vraiment que le fichier existe avant de donner l’URL
     await getObjectMetadata(key);
 
     const url = await getSignedDownloadUrl(key, 3600);
@@ -380,7 +508,7 @@ app.get("/preview/:projectId", async (req, res) => {
       url,
       key
     });
-  } catch (err) {
+  } catch {
     res.status(404).json({
       success: false,
       ready: false,
@@ -460,6 +588,7 @@ app.post("/webhook", express.raw({ type: "application/json" }), async (req, res)
     }
 
     const inputKey = `uploads/${projectId}/original.wav`;
+    const masterKey = `masters/${projectId}/master.wav`;
 
     try {
       const metadata = await getObjectMetadata(inputKey);
@@ -471,14 +600,50 @@ app.post("/webhook", express.raw({ type: "application/json" }), async (req, res)
         session.customer_email ||
         "";
 
-      if (clientEmail) {
-        await sendClientPaymentEmail(clientEmail, projectId);
-        await sendStudioPaidEmail(projectId, clientEmail);
-
-        console.log("📧 Mails envoyés : client + studio");
-      } else {
+      if (!clientEmail) {
         console.log("⚠️ Aucun email trouvé pour ce projet.");
+        return res.json({ received: true });
       }
+
+      await getObjectMetadata(masterKey);
+      const masterUrl = await getSignedDownloadUrl(masterKey, 3600 * 24 * 7);
+
+      let abbyInvoice = null;
+
+      try {
+        abbyInvoice = await createAbbyInvoiceForPayment({
+          projectId,
+          clientEmail,
+          amount: MASTERING_PRICE
+        });
+
+        console.log("🧾 Facture Abby créée :", abbyInvoice.invoiceId);
+      } catch (abbyErr) {
+        console.error("❌ Erreur création facture Abby :", abbyErr.message);
+      }
+
+      await markJobAsPaid(projectId, clientEmail, {
+        masterKey,
+        abbyInvoiceId: abbyInvoice?.invoiceId || null,
+        deliveredAt: new Date().toISOString()
+      });
+
+      await sendClientFinalEmail({
+        to: clientEmail,
+        projectId,
+        masterUrl,
+        invoicePdfBuffer: abbyInvoice?.invoicePdfBuffer || null,
+        invoiceId: abbyInvoice?.invoiceId || null
+      });
+
+      await sendStudioPaidEmail({
+        projectId,
+        clientEmail,
+        masterUrl,
+        invoiceId: abbyInvoice?.invoiceId || null
+      });
+
+      console.log("📧 Mail client + mail studio envoyés");
     } catch (err) {
       console.error("❌ Erreur post-paiement :", err);
     }
@@ -501,6 +666,9 @@ app.get("/test-env", (req, res) => {
     hasGmailPassword: !!process.env.GMAIL_APP_PASSWORD,
     hasStripeKey: !!process.env.STRIPE_SECRET_KEY,
     hasStripeWebhookSecret: !!process.env.STRIPE_WEBHOOK_SECRET,
+    hasAbbyKey: !!process.env.ABBY_API_KEY,
+    abbyBaseUrl: ABBY_BASE_URL,
+    masteringPrice: MASTERING_PRICE,
     paymentLink: STRIPE_PAYMENT_LINK
   });
 });
