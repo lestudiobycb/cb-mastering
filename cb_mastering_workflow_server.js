@@ -367,9 +367,8 @@ app.get("/preview/:projectId", async (req, res) => {
   try {
     const { projectId } = req.params;
 
-    const key = `previews/${projectId}/preview.wav`;
+    const key = `previews/${projectId}/preview.mp3`;
 
-    // vérifie que le fichier existe vraiment
     await getObjectMetadata(key);
 
     const url = await getSignedDownloadUrl(key, 3600);
