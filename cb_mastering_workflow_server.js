@@ -244,6 +244,53 @@ async function sendStudioPaidEmail(projectId, clientEmail) {
   });
 }
 
+async function createMasteringJob({ projectId, preset, clientEmail }) {
+  const job = {
+    id: projectId,
+    status: "waiting_preview",
+    preset: preset || "warm",
+    clientEmail: clientEmail || "",
+    inputKey: `uploads/${projectId}/original.wav`,
+    previewKey: `previews/${projectId}/preview.mp3`,
+    masterKey: `masters/${projectId}/master.wav`,
+    createdAt: new Date().toISOString()
+  };
+
+  const command = new PutObjectCommand({
+    Bucket: process.env.AWS_BUCKET_NAME,
+    Key: `jobs/${projectId}.json`,
+    Body: JSON.stringify(job, null, 2),
+    ContentType: "application/json"
+  });
+
+  await s3.send(command);
+
+  return job;
+}
+
+async function createMasteringJob({ projectId, preset, clientEmail }) {
+  const job = {
+    id: projectId,
+    status: "waiting_preview",
+    preset: preset || "warm",
+    clientEmail: clientEmail || "",
+    inputKey: `uploads/${projectId}/original.wav`,
+    previewKey: `previews/${projectId}/preview.wav`,
+    masterKey: `masters/${projectId}/master.wav`,
+    createdAt: new Date().toISOString()
+  };
+
+  const command = new PutObjectCommand({
+    Bucket: process.env.AWS_BUCKET_NAME,
+    Key: `jobs/${projectId}.json`,
+    Body: JSON.stringify(job, null, 2),
+    ContentType: "application/json"
+  });
+
+  await s3.send(command);
+  return job;
+}
+
 app.post("/create-project", async (req, res) => {
   try {
     console.log("📦 CREATE-PROJECT BODY:", req.body);
@@ -280,24 +327,14 @@ app.post("/create-project", async (req, res) => {
 });
 
 app.post("/generate-preview", async (req, res) => {
-  const { projectId } = req.body;
-
-  if (!projectId) {
-    return res.status(400).send("projectId manquant");
-  }
-
-  const localInput = `./tmp/${projectId}.wav`;
-  const localOutput = `./tmp/${projectId}.mp3`;
-
   try {
-    fs.mkdirSync("./tmp", { recursive: true });
+    const { projectId, preset } = req.body;
+
+    if (!projectId) {
+      return res.status(400).json({ error: "projectId manquant" });
+    }
 
     const inputKey = `uploads/${projectId}/original.wav`;
-    const previewKey = `previews/${projectId}/preview.mp3`;
-
-    await downloadFromS3(inputKey, localInput);
-    await generatePreview(localInput, localOutput);
-    await uploadToS3(localOutput, previewKey, "audio/mpeg");
 
     const metadata = await getObjectMetadata(inputKey);
     const clientEmail =
@@ -305,32 +342,24 @@ app.post("/generate-preview", async (req, res) => {
       metadata.metadata?.email ||
       "";
 
-    const originalFileUrl = await getSignedDownloadUrl(inputKey);
-    const previewUrl = await getSignedDownloadUrl(previewKey);
-
-    sendStudioNewMasteringEmail({
-  projectId,
-  clientEmail,
-  originalFileUrl,
-  previewUrl
-}).catch((mailErr) => {
-  console.error("❌ studio email error:", mailErr.message);
-});
-
-    if (fs.existsSync(localInput)) fs.unlinkSync(localInput);
-    if (fs.existsSync(localOutput)) fs.unlinkSync(localOutput);
+    const job = await createMasteringJob({
+      projectId,
+      preset: preset || "warm",
+      clientEmail
+    });
 
     res.json({
       success: true,
-      message: "Preview generated and studio email sent"
+      message: "Job créé pour le worker Logic",
+      job
     });
   } catch (err) {
-    console.error("❌ generate-preview error:", err);
+    console.error("❌ generate-preview job error:", err);
 
-    if (fs.existsSync(localInput)) fs.unlinkSync(localInput);
-    if (fs.existsSync(localOutput)) fs.unlinkSync(localOutput);
-
-    res.status(500).send("Erreur generate preview : " + err.message);
+    res.status(500).json({
+      error: "Erreur création job preview",
+      details: err.message
+    });
   }
 });
 
