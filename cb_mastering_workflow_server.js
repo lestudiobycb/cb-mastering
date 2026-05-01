@@ -367,15 +367,24 @@ app.get("/preview/:projectId", async (req, res) => {
   try {
     const { projectId } = req.params;
 
-    const key = `previews/${projectId}/preview.mp3`;
+    const key = `previews/${projectId}/preview.wav`;
+
+    // vérifie que le fichier existe vraiment
+    await getObjectMetadata(key);
+
     const url = await getSignedDownloadUrl(key, 3600);
 
-    res.json({ url });
+    res.json({
+      success: true,
+      url,
+      key
+    });
   } catch (err) {
     console.error("❌ preview error:", err);
 
-    res.status(500).json({
-      error: "Impossible de récupérer la preview",
+    res.status(404).json({
+      success: false,
+      error: "Preview pas encore prête",
       details: err.message
     });
   }
