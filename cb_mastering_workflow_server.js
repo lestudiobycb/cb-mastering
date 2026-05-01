@@ -27,7 +27,7 @@ const GMAIL_APP_PASSWORD = process.env.GMAIL_APP_PASSWORD;
 const STUDIO_EMAIL = "lestudiobycb@gmail.com";
 
 const ABBY_API_KEY = process.env.ABBY_API_KEY;
-const ABBY_BASE_URL = process.env.ABBY_BASE_URL || "https://api.app-abby.com";
+const ABBY_BASE_URL = (process.env.ABBY_BASE_URL || "https://api.app-abby.com").trim();
 
 const MASTERING_PRICE = Number(process.env.MASTERING_PRICE || 9);
 
@@ -182,11 +182,8 @@ async function createAbbyContact({ email }) {
     method: "POST",
     body: JSON.stringify({
       firstname: safeName || "Client",
-      lastname: "CB Mastering",
-      emails: [email],
-      notes: "Client créé automatiquement depuis CB Mastering",
-      language: "fr",
-      currency: "EUR"
+      lastname: "Client CB",
+      emails: [email]
     })
   });
 }
@@ -246,7 +243,13 @@ async function createAbbyInvoiceForPayment({ projectId, clientEmail, amount }) {
 
   const invoiceId = invoice.id;
 
-  const invoicePdfBuffer = await abbyDownloadPdf(invoiceId);
+  let invoicePdfBuffer = null;
+
+  try {
+    invoicePdfBuffer = await abbyDownloadPdf(invoiceId);
+  } catch (err) {
+    console.error("⚠️ Facture créée mais PDF Abby non récupéré :", err.message);
+  }
 
   return {
     contactId,
@@ -321,9 +324,7 @@ async function sendClientFinalEmail({
 
       <p>Merci pour votre commande.</p>
 
-      <p>
-        Votre master final est disponible ici :
-      </p>
+      <p>Votre master final est disponible ici :</p>
 
       <p>
         <a href="${masterUrl}" style="display:inline-block;padding:12px 18px;background:#d9903d;color:#fff;text-decoration:none;font-weight:bold;">
@@ -332,11 +333,13 @@ async function sendClientFinalEmail({
       </p>
 
       <p><strong>Référence projet :</strong> ${projectId}</p>
-      <p><strong>Facture Abby :</strong> ${invoiceId || "jointe à cet email"}</p>
+      <p><strong>Facture Abby :</strong> ${invoiceId || "création facture indisponible"}</p>
 
-      <p>
-        La facture est jointe à cet email au format PDF.
-      </p>
+      ${
+        invoicePdfBuffer
+          ? `<p>La facture est jointe à cet email au format PDF.</p>`
+          : `<p>La facture sera disponible séparément si nécessaire.</p>`
+      }
 
       <br>
 
@@ -605,6 +608,8 @@ app.post("/webhook", express.raw({ type: "application/json" }), async (req, res)
         return res.json({ received: true });
       }
 
+      console.log("🔎 Vérification du master :", masterKey);
+
       await getObjectMetadata(masterKey);
       const masterUrl = await getSignedDownloadUrl(masterKey, 3600 * 24 * 7);
 
@@ -619,7 +624,7 @@ app.post("/webhook", express.raw({ type: "application/json" }), async (req, res)
 
         console.log("🧾 Facture Abby créée :", abbyInvoice.invoiceId);
       } catch (abbyErr) {
-        console.error("❌ Erreur création facture Abby :", abbyErr.message);
+        console.error("❌ Erreur création facture Abby, mais mail maintenu :", abbyErr.message);
       }
 
       await markJobAsPaid(projectId, clientEmail, {
