@@ -369,20 +369,22 @@ app.get("/preview/:projectId", async (req, res) => {
 
     const key = `previews/${projectId}/preview.wav`;
 
+    // Vérifie vraiment que le fichier existe avant de donner l’URL
+    await getObjectMetadata(key);
+
     const url = await getSignedDownloadUrl(key, 3600);
 
     res.json({
       success: true,
+      ready: true,
       url,
       key
     });
   } catch (err) {
-    console.error("❌ preview error:", err);
-
     res.status(404).json({
       success: false,
-      error: "Preview pas encore prête",
-      details: err.message
+      ready: false,
+      error: "Preview pas encore prête"
     });
   }
 });
