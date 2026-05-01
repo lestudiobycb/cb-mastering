@@ -251,7 +251,7 @@ async function createMasteringJob({ projectId, preset, clientEmail }) {
     preset: preset || "warm",
     clientEmail: clientEmail || "",
     inputKey: `uploads/${projectId}/original.wav`,
-    previewKey: `previews/${projectId}/preview.mp3`,
+    previewKey: `previews/${projectId}/preview.wav`,
     masterKey: `masters/${projectId}/master.wav`,
     createdAt: new Date().toISOString()
   };
@@ -367,9 +367,7 @@ app.get("/preview/:projectId", async (req, res) => {
   try {
     const { projectId } = req.params;
 
-    const key = `previews/${projectId}/preview.mp3`;
-
-    await getObjectMetadata(key);
+    const key = `previews/${projectId}/preview.wav`;
 
     const url = await getSignedDownloadUrl(key, 3600);
 
