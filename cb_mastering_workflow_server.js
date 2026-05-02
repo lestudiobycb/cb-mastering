@@ -1,7 +1,6 @@
 const express = require("express");
 const crypto = require("crypto");
 const cors = require("cors");
-const nodemailer = require("nodemailer");
 const Stripe = require("stripe");
 
 const {
@@ -22,9 +21,11 @@ const STRIPE_PAYMENT_LINK =
   process.env.STRIPE_PAYMENT_LINK ||
   "https://buy.stripe.com/dRm9AU9ETfdB289dCpcfK0d";
 
-const GMAIL_USER = process.env.GMAIL_USER || "lestudiobycb@gmail.com";
-const GMAIL_APP_PASSWORD = process.env.GMAIL_APP_PASSWORD;
-const STUDIO_EMAIL = "lestudiobycb@gmail.com";
+const STUDIO_EMAIL = process.env.STUDIO_EMAIL || "lestudiobycb@gmail.com";
+
+const RESEND_API_KEY = process.env.RESEND_API_KEY;
+const RESEND_FROM_EMAIL =
+  process.env.RESEND_FROM_EMAIL || "CB Production <onboarding@resend.dev>";
 
 const ABBY_API_KEY = process.env.ABBY_API_KEY;
 const ABBY_BASE_URL = (process.env.ABBY_BASE_URL || "https://api.app-abby.com").trim();
@@ -51,15 +52,41 @@ app.use((req, res, next) => {
 
 app.use(express.urlencoded({ extended: true }));
 
-const transporter = nodemailer.createTransport({
-  host: "smtp.gmail.com",
-  port: 465,
-  secure: true,
-  auth: {
-    user: GMAIL_USER,
-    pass: GMAIL_APP_PASSWORD
+async function sendResendEmail({ to, subject, html, attachments = [] }) {
+  if (!RESEND_API_KEY) {
+    throw new Error("RESEND_API_KEY manquante");
   }
-});
+
+  const response = await fetch("https://api.resend.com/emails", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${RESEND_API_KEY}`,
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({
+      from: RESEND_FROM_EMAIL,
+      to: Array.isArray(to) ? to : [to],
+      subject,
+      html,
+      attachments
+    })
+  });
+
+  const text = await response.text();
+
+  let data;
+  try {
+    data = text ? JSON.parse(text) : null;
+  } catch {
+    data = text;
+  }
+
+  if (!response.ok) {
+    throw new Error(`Resend API ${response.status}: ${text}`);
+  }
+
+  return data;
+}
 
 async function getSignedDownloadUrl(key, expiresIn = 3600 * 24 * 7) {
   const command = new GetObjectCommand({
@@ -86,8 +113,8 @@ async function getJsonFromS3(key) {
   });
 
   const response = await s3.send(command);
-
   const chunks = [];
+
   for await (const chunk of response.Body) {
     chunks.push(chunk);
   }
@@ -150,10 +177,6 @@ async function abbyRequest(path, options = {}) {
 }
 
 async function abbyDownloadPdf(invoiceId) {
-  if (!ABBY_API_KEY) {
-    throw new Error("ABBY_API_KEY manquante");
-  }
-
   const response = await fetch(
     `${ABBY_BASE_URL}/v2/billing/${invoiceId}/download?locale=fr`,
     {
@@ -211,7 +234,7 @@ async function createAbbyInvoice({ customerId, projectId, amount }) {
           quantity: 1,
           quantityUnit: "unit",
           unitPrice: amount,
-          unitPriceHT: amount,
+          vatCode: "FR_2000",
           type: "commercial_or_craft_services"
         }
       ]
@@ -350,20 +373,20 @@ async function sendClientFinalEmail({
     </div>
   `;
 
-  await transporter.sendMail({
-    from: `"CB Production" <${GMAIL_USER}>`,
+  const attachments = invoicePdfBuffer
+    ? [
+        {
+          filename: `facture-cb-production-${projectId}.pdf`,
+          content: invoicePdfBuffer.toString("base64")
+        }
+      ]
+    : [];
+
+  await sendResendEmail({
     to,
     subject: "CB Production - Votre master est prêt",
     html,
-    attachments: invoicePdfBuffer
-      ? [
-          {
-            filename: `facture-cb-production-${projectId}.pdf`,
-            content: invoicePdfBuffer,
-            contentType: "application/pdf"
-          }
-        ]
-      : []
+    attachments
   });
 }
 
@@ -380,6 +403,7 @@ async function sendStudioPaidEmail({
   const originalFileUrl = await getSignedDownloadUrl(inputKey);
 
   let previewUrl = "";
+
   try {
     await getObjectMetadata(previewKey);
     previewUrl = await getSignedDownloadUrl(previewKey);
@@ -415,8 +439,7 @@ async function sendStudioPaidEmail({
     </div>
   `;
 
-  await transporter.sendMail({
-    from: `"CB Production System" <${GMAIL_USER}>`,
+  await sendResendEmail({
     to: STUDIO_EMAIL,
     subject: `✅ MASTER LIVRÉ - ${clientEmail || projectId}`,
     html
@@ -575,83 +598,109 @@ app.post("/webhook", express.raw({ type: "application/json" }), async (req, res)
 
   console.log("✅ Event reçu :", event.type);
 
-  if (event.type === "checkout.session.completed") {
-    const session = event.data.object;
+  if (event.type !== "checkout.session.completed") {
+    return res.json({ received: true });
+  }
 
-    const projectId =
-      session.client_reference_id ||
-      session.metadata?.projectId ||
-      null;
+  const session = event.data.object;
 
-    console.log("💰 Paiement validé pour projet:", projectId);
+  const projectId =
+    session.client_reference_id ||
+    session.metadata?.projectId ||
+    null;
 
-    if (!projectId) {
-      console.log("⚠️ Aucun projectId trouvé dans la session Stripe.");
-      return res.json({ received: true });
-    }
+  console.log("💰 Session Stripe validée pour projet:", projectId);
 
-    const inputKey = `uploads/${projectId}/original.wav`;
-    const masterKey = `masters/${projectId}/master.wav`;
+  if (!projectId) {
+    console.log("⚠️ Aucun projectId trouvé dans la session Stripe.");
+    return res.json({ received: true });
+  }
+
+  const isPaid =
+    session.payment_status === "paid" ||
+    session.amount_total === 0;
+
+  if (!isPaid) {
+    console.log("⚠️ Session complétée mais paiement non validé :", session.payment_status);
+    return res.json({ received: true });
+  }
+
+  const inputKey = `uploads/${projectId}/original.wav`;
+  const masterKey = `masters/${projectId}/master.wav`;
+
+  try {
+    let clientEmail =
+      session.customer_details?.email ||
+      session.customer_email ||
+      "";
 
     try {
       const metadata = await getObjectMetadata(inputKey);
-
-      const clientEmail =
+      clientEmail =
         metadata.Metadata?.email ||
         metadata.metadata?.email ||
-        session.customer_details?.email ||
-        session.customer_email ||
-        "";
+        clientEmail;
+    } catch (err) {
+      console.warn("⚠️ Original introuvable ou metadata absente :", err.message);
+    }
 
-      if (!clientEmail) {
-        console.log("⚠️ Aucun email trouvé pour ce projet.");
-        return res.json({ received: true });
-      }
+    if (!clientEmail) {
+      console.log("⚠️ Aucun email trouvé pour ce projet.");
+      return res.json({ received: true });
+    }
 
-      console.log("🔎 Vérification du master :", masterKey);
+    console.log("🔎 Vérification du master :", masterKey);
 
-      await getObjectMetadata(masterKey);
-      const masterUrl = await getSignedDownloadUrl(masterKey, 3600 * 24 * 7);
+    await getObjectMetadata(masterKey);
 
-      let abbyInvoice = null;
+    const masterUrl = await getSignedDownloadUrl(masterKey, 3600 * 24 * 7);
 
-      try {
-        abbyInvoice = await createAbbyInvoiceForPayment({
-          projectId,
-          clientEmail,
-          amount: MASTERING_PRICE
-        });
+    const paidAmount =
+      typeof session.amount_total === "number"
+        ? session.amount_total / 100
+        : MASTERING_PRICE;
 
-        console.log("🧾 Facture Abby créée :", abbyInvoice.invoiceId);
-      } catch (abbyErr) {
-        console.error("❌ Erreur création facture Abby, mais mail maintenu :", abbyErr.message);
-      }
+    let abbyInvoice = null;
 
-      await markJobAsPaid(projectId, clientEmail, {
-        masterKey,
-        abbyInvoiceId: abbyInvoice?.invoiceId || null,
-        deliveredAt: new Date().toISOString()
-      });
-
-      await sendClientFinalEmail({
-        to: clientEmail,
-        projectId,
-        masterUrl,
-        invoicePdfBuffer: abbyInvoice?.invoicePdfBuffer || null,
-        invoiceId: abbyInvoice?.invoiceId || null
-      });
-
-      await sendStudioPaidEmail({
+    try {
+      abbyInvoice = await createAbbyInvoiceForPayment({
         projectId,
         clientEmail,
-        masterUrl,
-        invoiceId: abbyInvoice?.invoiceId || null
+        amount: paidAmount
       });
 
-      console.log("📧 Mail client + mail studio envoyés");
-    } catch (err) {
-      console.error("❌ Erreur post-paiement :", err);
+      console.log("🧾 Facture Abby créée :", abbyInvoice.invoiceId);
+    } catch (abbyErr) {
+      console.error("❌ Erreur création facture Abby, mais mail maintenu :", abbyErr.message);
     }
+
+    await markJobAsPaid(projectId, clientEmail, {
+      masterKey,
+      stripeSessionId: session.id,
+      stripePaymentStatus: session.payment_status,
+      stripeAmountTotal: session.amount_total,
+      abbyInvoiceId: abbyInvoice?.invoiceId || null,
+      deliveredAt: new Date().toISOString()
+    });
+
+    await sendClientFinalEmail({
+      to: clientEmail,
+      projectId,
+      masterUrl,
+      invoicePdfBuffer: abbyInvoice?.invoicePdfBuffer || null,
+      invoiceId: abbyInvoice?.invoiceId || null
+    });
+
+    await sendStudioPaidEmail({
+      projectId,
+      clientEmail,
+      masterUrl,
+      invoiceId: abbyInvoice?.invoiceId || null
+    });
+
+    console.log("📧 Mail client + mail studio envoyés via Resend");
+  } catch (err) {
+    console.error("❌ Erreur post-paiement :", err);
   }
 
   res.json({ received: true });
@@ -667,14 +716,15 @@ app.get("/test-env", (req, res) => {
     bucket: process.env.AWS_BUCKET_NAME,
     hasAwsKey: !!process.env.AWS_ACCESS_KEY_ID,
     hasAwsSecret: !!process.env.AWS_SECRET_ACCESS_KEY,
-    hasGmailUser: !!process.env.GMAIL_USER,
-    hasGmailPassword: !!process.env.GMAIL_APP_PASSWORD,
     hasStripeKey: !!process.env.STRIPE_SECRET_KEY,
     hasStripeWebhookSecret: !!process.env.STRIPE_WEBHOOK_SECRET,
     hasAbbyKey: !!process.env.ABBY_API_KEY,
     abbyBaseUrl: ABBY_BASE_URL,
     masteringPrice: MASTERING_PRICE,
-    paymentLink: STRIPE_PAYMENT_LINK
+    paymentLink: STRIPE_PAYMENT_LINK,
+    hasResendKey: !!process.env.RESEND_API_KEY,
+    resendFromEmail: RESEND_FROM_EMAIL,
+    studioEmail: STUDIO_EMAIL
   });
 });
 
