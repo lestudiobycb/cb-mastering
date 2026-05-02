@@ -30,7 +30,7 @@ const RESEND_FROM_EMAIL =
 const ABBY_API_KEY = process.env.ABBY_API_KEY;
 const ABBY_BASE_URL = (process.env.ABBY_BASE_URL || "https://api.app-abby.com").trim();
 
-const MASTERING_PRICE = Number(process.env.MASTERING_PRICE || 9);
+const MASTERING_PRICE = Number(process.env.MASTERING_PRICE || 900);
 const VALID_PRESETS = ["warm", "clean", "loud"];
 
 const s3 = new S3Client({
