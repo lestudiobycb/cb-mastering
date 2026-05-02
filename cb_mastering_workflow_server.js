@@ -198,20 +198,17 @@ async function abbyDownloadPdf(invoiceId) {
 }
 
 async function createAbbyContact({ email }) {
-  const name = email?.split("@")[0] || "Client";
-  const safeName = name.replace(/[._-]/g, " ");
-
   return abbyRequest("/contact", {
     method: "POST",
     body: JSON.stringify({
-      firstname: safeName || "Client",
+      firstname: email || "Client",
       lastname: "Client CB",
       emails: [email]
     })
   });
 }
 
-async function createAbbyInvoice({ customerId, projectId, amount }) {
+async function createAbbyInvoice({ customerId, projectId, originalPrice, paidAmount }) {
   const invoice = await abbyRequest(`/v2/billing/invoice/${customerId}`, {
     method: "POST",
     body: JSON.stringify({})
@@ -223,22 +220,35 @@ async function createAbbyInvoice({ customerId, projectId, amount }) {
     throw new Error("Abby n’a pas retourné d’ID de facture");
   }
 
+  const lines = [
+    {
+      designation: "Mastering automatique CB Production",
+      description: `Mastering automatique en ligne - Projet ${projectId}`,
+      reference: `CB-MASTER-${projectId}`,
+      quantity: 1,
+      quantityUnit: "unit",
+      unitPrice: originalPrice,
+      vatCode: "FR_2000",
+      type: "commercial_or_craft_services"
+    }
+  ];
+
+  if (paidAmount === 0 && originalPrice > 0) {
+    lines.push({
+      designation: "Remise exceptionnelle",
+      description: "Réduction 100%",
+      reference: `CB-DISCOUNT-${projectId}`,
+      quantity: 1,
+      quantityUnit: "unit",
+      unitPrice: -originalPrice,
+      vatCode: "FR_2000",
+      type: "commercial_or_craft_services"
+    });
+  }
+
   await abbyRequest(`/v2/billing/${invoiceId}/lines`, {
     method: "PATCH",
-    body: JSON.stringify({
-      lines: [
-        {
-          designation: "Mastering automatique CB Production",
-          description: `Mastering automatique en ligne - Projet ${projectId}`,
-          reference: `CB-MASTER-${projectId}`,
-          quantity: 1,
-          quantityUnit: "unit",
-          unitPrice: amount,
-          vatCode: "FR_2000",
-          type: "commercial_or_craft_services"
-        }
-      ]
-    })
+    body: JSON.stringify({ lines })
   });
 
   const finalized = await abbyRequest(`/v2/billing/${invoiceId}/finalize`, {
@@ -249,7 +259,12 @@ async function createAbbyInvoice({ customerId, projectId, amount }) {
   return finalized || invoice;
 }
 
-async function createAbbyInvoiceForPayment({ projectId, clientEmail, amount }) {
+async function createAbbyInvoiceForPayment({
+  projectId,
+  clientEmail,
+  originalPrice,
+  paidAmount
+}) {
   const contact = await createAbbyContact({ email: clientEmail });
 
   const contactId = contact.id;
@@ -261,7 +276,8 @@ async function createAbbyInvoiceForPayment({ projectId, clientEmail, amount }) {
   const invoice = await createAbbyInvoice({
     customerId: contactId,
     projectId,
-    amount
+    originalPrice,
+    paidAmount
   });
 
   const invoiceId = invoice.id;
@@ -660,13 +676,19 @@ app.post("/webhook", express.raw({ type: "application/json" }), async (req, res)
         ? session.amount_total / 100
         : MASTERING_PRICE;
 
+    const originalPrice = MASTERING_PRICE;
+
+    console.log("💶 Montant Stripe payé :", paidAmount);
+    console.log("🏷️ Prix original mastering :", originalPrice);
+
     let abbyInvoice = null;
 
     try {
       abbyInvoice = await createAbbyInvoiceForPayment({
         projectId,
         clientEmail,
-        amount: paidAmount
+        originalPrice,
+        paidAmount
       });
 
       console.log("🧾 Facture Abby créée :", abbyInvoice.invoiceId);
@@ -679,6 +701,8 @@ app.post("/webhook", express.raw({ type: "application/json" }), async (req, res)
       stripeSessionId: session.id,
       stripePaymentStatus: session.payment_status,
       stripeAmountTotal: session.amount_total,
+      originalPrice,
+      paidAmount,
       abbyInvoiceId: abbyInvoice?.invoiceId || null,
       deliveredAt: new Date().toISOString()
     });
