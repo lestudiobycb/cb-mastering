@@ -31,6 +31,7 @@ const ABBY_API_KEY = process.env.ABBY_API_KEY;
 const ABBY_BASE_URL = (process.env.ABBY_BASE_URL || "https://api.app-abby.com").trim();
 
 const MASTERING_PRICE = Number(process.env.MASTERING_PRICE || 9);
+const VALID_PRESETS = ["warm", "clean", "loud"];
 
 const s3 = new S3Client({
   region: process.env.AWS_REGION,
@@ -51,6 +52,16 @@ app.use((req, res, next) => {
 });
 
 app.use(express.urlencoded({ extended: true }));
+
+function normalizePreset(preset) {
+  const cleanPreset = String(preset || "warm").toLowerCase().trim();
+
+  if (VALID_PRESETS.includes(cleanPreset)) {
+    return cleanPreset;
+  }
+
+  return "warm";
+}
 
 async function sendResendEmail({ to, subject, html, attachments = [] }) {
   if (!RESEND_API_KEY) {
@@ -299,10 +310,12 @@ async function createAbbyInvoiceForPayment({
 }
 
 async function createMasteringJob({ projectId, preset, clientEmail }) {
+  const normalizedPreset = normalizePreset(preset);
+
   const job = {
     id: projectId,
     status: "waiting_preview",
-    preset: preset || "warm",
+    preset: normalizedPreset,
     clientEmail: clientEmail || "",
     inputKey: `uploads/${projectId}/original.wav`,
     previewKey: `previews/${projectId}/preview.wav`,
@@ -410,7 +423,8 @@ async function sendStudioPaidEmail({
   projectId,
   clientEmail,
   masterUrl,
-  invoiceId
+  invoiceId,
+  preset
 }) {
   const inputKey = `uploads/${projectId}/original.wav`;
   const previewKey = `previews/${projectId}/preview.wav`;
@@ -433,6 +447,7 @@ async function sendStudioPaidEmail({
 
       <p><strong>Project ID :</strong> ${projectId}</p>
       <p><strong>Email client :</strong> ${clientEmail || "Non renseigné"}</p>
+      <p><strong>Preset client :</strong> ${preset || "non renseigné"}</p>
       <p><strong>Facture Abby :</strong> ${invoiceId || "non créée"}</p>
 
       <hr>
@@ -505,6 +520,8 @@ app.post("/generate-preview", async (req, res) => {
       return res.status(400).json({ error: "projectId manquant" });
     }
 
+    const normalizedPreset = normalizePreset(preset);
+
     const inputKey = `uploads/${projectId}/original.wav`;
 
     const metadata = await getObjectMetadata(inputKey);
@@ -515,7 +532,13 @@ app.post("/generate-preview", async (req, res) => {
 
     const job = await createMasteringJob({
       projectId,
-      preset: preset || "warm",
+      preset: normalizedPreset,
+      clientEmail
+    });
+
+    console.log("🎛️ Job mastering créé :", {
+      projectId,
+      preset: normalizedPreset,
       clientEmail
     });
 
@@ -650,6 +673,16 @@ app.post("/webhook", express.raw({ type: "application/json" }), async (req, res)
       session.customer_email ||
       "";
 
+    let job = null;
+
+    try {
+      job = await getJsonFromS3(`jobs/${projectId}.json`);
+    } catch {
+      job = null;
+    }
+
+    const preset = job?.preset || "warm";
+
     try {
       const metadata = await getObjectMetadata(inputKey);
       clientEmail =
@@ -680,6 +713,7 @@ app.post("/webhook", express.raw({ type: "application/json" }), async (req, res)
 
     console.log("💶 Montant Stripe payé :", paidAmount);
     console.log("🏷️ Prix original mastering :", originalPrice);
+    console.log("🎛️ Preset livré :", preset);
 
     let abbyInvoice = null;
 
@@ -698,6 +732,7 @@ app.post("/webhook", express.raw({ type: "application/json" }), async (req, res)
 
     await markJobAsPaid(projectId, clientEmail, {
       masterKey,
+      preset,
       stripeSessionId: session.id,
       stripePaymentStatus: session.payment_status,
       stripeAmountTotal: session.amount_total,
@@ -719,7 +754,8 @@ app.post("/webhook", express.raw({ type: "application/json" }), async (req, res)
       projectId,
       clientEmail,
       masterUrl,
-      invoiceId: abbyInvoice?.invoiceId || null
+      invoiceId: abbyInvoice?.invoiceId || null,
+      preset
     });
 
     console.log("📧 Mail client + mail studio envoyés via Resend");
@@ -745,6 +781,7 @@ app.get("/test-env", (req, res) => {
     hasAbbyKey: !!process.env.ABBY_API_KEY,
     abbyBaseUrl: ABBY_BASE_URL,
     masteringPrice: MASTERING_PRICE,
+    validPresets: VALID_PRESETS,
     paymentLink: STRIPE_PAYMENT_LINK,
     hasResendKey: !!process.env.RESEND_API_KEY,
     resendFromEmail: RESEND_FROM_EMAIL,
